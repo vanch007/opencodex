@@ -11,7 +11,7 @@ Les paramètres des agents déterminent la surface de collaboration Codex annonc
 | --- | --- | --- | --- |
 | `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` marque tous les modèles du catalogue comme compatibles v1 ; `v2` les marque tous comme compatibles v2. `default` rétablit les choix imposés en amont (Sol/Terra en v2, Luna en v1) et suit sinon l’indicateur natif `multi_agent_v2`. S’applique aux nouvelles sessions. |
 | `keepNativeChatGptOnV1?` | `boolean` | `false` | Lorsque `multiAgentMode` vaut `"v2"`, marque les lignes natives ChatGPT (Sol/Terra et les autres modèles du backend ChatGPT) comme v1. Les parents routés restent en v2. Utilisez cette option pour qu'un parent ChatGPT puisse encore lancer Grok ou Claude — les tâches enfants v2 natives sont chiffrées par le service en amont ([#92](https://github.com/lidge-jun/opencodex/issues/92)). Ignoré en `v1` et `default`. |
-| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5` | Jusqu’à cinq identifiants de modèles natifs non qualifiés, qualifiés par un compte sous la forme `<selector>/<native-openai-model>`, ou routés sous la forme `provider/model`, affichés en tête du sélecteur de sous-agents. Le tableau de bord ne propose que les identifiants natifs non qualifiés et les identifiants routés ; lors de l’enregistrement, il omet les choix exacts qualifiés par un compte. Pour les définir, utilisez `ocx agent subagents set` ou modifiez la configuration. Après la [migration unique vers Astra](/reference/configuration/agents/#astra-roster-upgrade), une liste explicitement vide est conservée. |
+| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna` | Jusqu’à cinq identifiants de modèles natifs non qualifiés, qualifiés par un compte sous la forme `<selector>/<native-openai-model>`, ou routés sous la forme `provider/model`, affichés en tête du sélecteur de sous-agents. Le tableau de bord ne propose que les identifiants natifs non qualifiés et les identifiants routés ; lors de l’enregistrement, il omet les choix exacts qualifiés par un compte. Pour les définir, utilisez `ocx agent subagents set` ou modifiez la configuration. Après la [migration unique vers Astra](/reference/configuration/agents/#astra-roster-upgrade), une liste explicitement vide est conservée. |
 | `injectionModel?` | `string` | — | Modèle de sous-agent natif ou routé privilégié dans les consignes de délégation v2 produites par le proxy. |
 | `injectionEffort?` | `string` | — | Niveau d’effort privilégié (de `low` à `ultra`), pertinent uniquement avec `injectionModel`. |
 | `injectionPrompt?` | `string` | — | Remplace le corps des consignes v2 intégrées. Accepte `{{model}}`, `{{effort}}`, `{{roster}}` et `{{fallback}}`. La présence d’un `injectionModel` suffit pour produire le prompt personnalisé. |
@@ -67,9 +67,9 @@ opencodex ignore les candidats désactivés, non routables, en mauvais état, en
   "injectionModel": "gpt-5.5",
   "injectionEffort": "high",
   "syncCodexSubagentDefaults": true,
-  "subagentModelFallback": ["gpt-5.4-mini"],
+  "subagentModelFallback": ["gpt-5.6-luna"],
   "subagentModelFallbackByModel": {
-    "gpt-5.5": ["gpt-5.4-mini"]
+    "gpt-5.5": ["gpt-5.6-luna"]
   },
   "subagentModelFallbackPollMs": 60000,
   "subagentEffortCap": "high"
@@ -118,5 +118,7 @@ Ce mécanisme de récupération s’applique aux enfants routés directement et 
 Les plafonds s’appliquent uniquement à la fonctionnalité de collaboration v2. Un tour principal est admissible lorsque ses outils exposent v2. Un tour enfant l’est lorsqu’il porte exactement le marqueur codex-rs `x-openai-subagent: collab_spawn` ou `"subagent_kind": "thread_spawn"` dans `x-codex-turn-metadata`, même si les outils terminaux n’exposent plus la collaboration. Les tours principaux v1, `multiAgentMode: "v1"`, ainsi que les tours de compactage, de révision et de consolidation de la mémoire ne sont pas plafonnés.
 
 Un plafond ne peut que réduire l’effort. Le niveau retenu est le niveau annoncé le plus élevé qui ne dépasse pas le plafond. Si le modèle ne propose aucun contrôle d’effort ou si aucun niveau pris en charge ne convient, opencodex supprime le paramètre d’effort et laisse le fournisseur appliquer sa valeur par défaut. `max` et `ultra` sont acceptés, tandis que le tableau de bord propose les niveaux de `low` à `xhigh`.
+
+Les plafonds configurés s’appliquent aussi aux tours Chat Completions natifs admissibles sans effort épinglé pour le modèle. La conversion vers la valeur du fournisseur intervient lorsqu’un épinglage est appliqué ou qu’un plafond modifie la valeur ; sinon, la valeur de l’appelant natif conserve sa forme d’origine.
 
 Pour une présentation destinée aux débutants des comportements v1, default et v2, consultez [Surfaces de sous-agents](/fr/guides/sub-agent-surface/).

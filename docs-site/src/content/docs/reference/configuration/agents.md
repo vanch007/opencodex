@@ -14,19 +14,26 @@ On the first start after upgrading, existing `subagentModels` lists receive
 `gpt-6-astra` first. The first four unique non-Astra choices are retained and the
 old fifth choice is dropped. If `gpt-5.5` is retained, it moves to the end.
 The previous default list therefore becomes Astra, Sol, Terra, Luna, 5.5.
-An unset list receives those same defaults; an explicit empty legacy list becomes
+An unset legacy list receives the current defaults; an explicit empty legacy list becomes
 `["gpt-6-astra"]`. Existing Astra entries are not duplicated.
 
-The internal `subagentModelsVersion: 1` marker makes this a one-time upgrade.
-Afterwards you can reorder, remove Astra, or save an empty list without startup
-changing your choices again. Disabled models remain disabled. Astra availability
+The current default is `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`. On the first
+start after upgrading, a stored list is cleaned of retired rows: `gpt-5.6-sol` and
+`gpt-5.6-luna` become `gpt-6-sol` and `gpt-6-luna` in the same position, and every
+other `gpt-5.5` or `gpt-5.6` model is removed. Ids with a `/` (routed
+`provider/model` or account-qualified choices) are left as written. A list that
+held only retired rows receives the current default; an empty list stays empty.
+
+The internal `subagentModelsVersion` marker (currently `2`) makes each step a
+one-time upgrade. Afterwards you can reorder, remove Astra, or save an empty list
+without startup changing your choices again. Disabled models remain disabled. Astra availability
 still depends on upstream support for your account.
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` stamps every catalog model as v1; `v2` stamps every model as v2. `default` restores upstream pins (Sol/Terra v2, Luna v1) and otherwise follows the native `multi_agent_v2` flag. Applies to new sessions. |
 | `keepNativeChatGptOnV1?` | `boolean` | `false` | When `multiAgentMode` is `"v2"`, disable the global V2 override, stamp ChatGPT-native rows as v1, and keep routed rows on v2. Codex resolves the global override before catalog pins, so both parts are required for a ChatGPT parent to spawn routed children without backend-encrypted tasks ([#92](https://github.com/lidge-jun/opencodex/issues/92)). Ignored in `v1` and `default`. |
-| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5` | Up to five bare native, account-qualified `<selector>/<native-openai-model>`, or routed `provider/model` ids featured first in the sub-agent picker. The dashboard offers only bare native and routed ids and omits exact account-qualified choices when it saves; use `ocx agent subagents set` or edit the configuration for exact choices. After the [one-time Astra upgrade](#astra-roster-upgrade), an explicit empty list is preserved. |
+| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna` | Up to five bare native, account-qualified `<selector>/<native-openai-model>`, or routed `provider/model` ids featured first in the sub-agent picker. The dashboard offers only bare native and routed ids and omits exact account-qualified choices when it saves; use `ocx agent subagents set` or edit the configuration for exact choices. After the [one-time Astra upgrade](#astra-roster-upgrade), an explicit empty list is preserved. |
 | `injectionModel?` | `string` | — | Preferred native or routed sub-agent model used in proxy-authored v2 delegation guidance. |
 | `injectionEffort?` | `string` | — | Preferred effort (`low` through `ultra`), meaningful only with `injectionModel`. |
 | `injectionPrompt?` | `string` | — | Replaces the built-in v2 guidance body. Supports `{{model}}`, `{{effort}}`, `{{roster}}`, and `{{fallback}}`. A configured `injectionModel` is sufficient to render the custom prompt. |
@@ -37,6 +44,7 @@ still depends on upstream support for your account.
 | `subagentModelFallbackPollMs?` | `number` | `60000` | Availability-probe cache interval. Values below 1000 ms fall back to the default. |
 | `effortCap?` | `string` | — | Hard ceiling for qualifying v2 main turns and marked spawned-child turns. Accepts `low` through `ultra`. |
 | `subagentEffortCap?` | `string` | — | Additional ceiling for spawned-child turns only. When both caps apply, the lower wins. |
+| `plaintextV2AgentMessages?` | `boolean` | — (unset) | Experimental opt-in. It runs only when explicitly set to `true` and asks eligible native ChatGPT v2 parents to emit `spawn_agent`, `send_message`, and `followup_task` message arguments as plaintext. See [Plaintext v2 agent messages](#plaintext-v2-agent-messages). |
 | `agentTaskRecovery?` | `object` | — | Experimental opt-in recovery for backend-encrypted v2 tasks sent to routed providers. Disabled unless `enabled: true`; see [Encrypted v2 task recovery](#encrypted-v2-task-recovery). |
 
 Manage the surface with the dashboard or
@@ -153,14 +161,68 @@ on a mid-thread model switch.
   "injectionModel": "gpt-5.5",
   "injectionEffort": "high",
   "syncCodexSubagentDefaults": true,
-  "subagentModelFallback": ["gpt-5.4-mini"],
+  "subagentModelFallback": ["gpt-5.6-luna"],
   "subagentModelFallbackByModel": {
-    "gpt-5.5": ["gpt-5.4-mini"]
+    "gpt-5.5": ["gpt-5.6-luna"]
   },
   "subagentModelFallbackPollMs": 60000,
   "subagentEffortCap": "high"
 }
 ```
+
+## Plaintext v2 agent messages
+
+`plaintextV2AgentMessages` is unset in a fresh config and runs only when explicitly set to `true`.
+The caller must use the Responses wire, and the final destination must use the canonical ChatGPT
+Codex forward transport: `adapter: "openai-responses"`, `authMode: "forward"`, and the exact base URL
+`https://chatgpt.com/backend-api/codex`. OpenAI API-key providers, custom OpenAI-compatible
+gateways, routes whose final destination is another provider, and non-Responses callers are never
+rewritten.
+
+For an eligible v2 request, opencodex recognizes the catalog by a top-level `collaboration`
+namespace with a direct `spawn_agent` child. The catalog can be in top-level `tools`, or in the
+first input item's developer `additional_tools` when `tools` is absent (Responses Lite).
+An explicit top-level catalog takes precedence; user-role and later historical catalogs do not
+activate the option. It removes
+`parameters.properties.message.encrypted: true`, when present, only from `spawn_agent`,
+`send_message`, and `followup_task`. ChatGPT reserves both the `collaboration` namespace and those
+three tool names, so the request uses fixed private aliases for all four identities. Before making
+that change, opencodex checks top-level and `additional_tools` catalogs, nested namespaces,
+`tool_search_output` declarations, `tool_choice`, and prior call items for the private namespace and
+fixed aliases. Any conflict leaves the entire request unchanged. OpenCodex restores only the
+request-scoped aliases in JSON, SSE, and WebSocket responses before Codex receives the tool call.
+The `encrypted_function_args: []` field is preserved so compatible Codex clients recognize the
+message as plaintext.
+
+This path adds no recovery request and therefore does not spend the extra ChatGPT quota used by a
+cache miss in `agentTaskRecovery`. It cannot change tasks that are already encrypted. If the request
+already declares the private alias or a conflicting reference, opencodex leaves that request
+unchanged; separately enabled recovery can still handle a routed task that is later encrypted. If
+ChatGPT rejects or ignores the modified schema, or the Codex client does not recognize the plaintext
+response fields, the call can fail. OpenCodex does not retry the parent request with the original
+schema because doing so could duplicate quota use or tool calls.
+
+Restoration uses a 10,000-identity traversal budget for each response payload. If a payload exhausts
+that budget, bounded JSON returns HTTP 502 and a stream returns `response.failed`; neither path
+sends the private aliases to Codex or saves the refused response for `previous_response_id`
+continuation.
+
+For successfully rewritten calls, the option removes application-layer encryption from agent
+message arguments. HTTPS still encrypts network transport, but message text can appear in Codex
+task history, routed-provider requests, `responses-state.json` or its spill files, and
+`usage-debug.jsonl` when debug capture is enabled. The behavior depends on undocumented ChatGPT
+schema and response fields and may stop working after a backend or client update. Startup prints a
+warning while it is enabled.
+
+```json
+{
+  "plaintextV2AgentMessages": true
+}
+```
+
+The equivalent CLI command is `ocx config set plaintextV2AgentMessages true`. Restart the proxy
+after changing the setting.
+
 
 ## Encrypted v2 task recovery
 
@@ -203,6 +265,19 @@ Admission and retention are deliberately narrow:
 - any malformed envelope, failed recovery, timeout, or validation failure preserves the existing
   fail-closed error; client cancellation returns 499. Neither path forwards ciphertext to the
   routed provider.
+
+Recovery accepts one consecutive run of up to 32 complete Fernet-shaped encrypted parts, with
+at most 2 MiB of combined ciphertext. Parts retain their order and boundaries in one authenticated
+request. Cache identity includes the sequence; the original input is revalidated before assignment
+replacement. HTTP failures retain the existing bounded diagnostic reason and do not trigger an
+internal retry.
+
+Split tokens are not reconstructed for recovery. A bounded run whose exact concatenation has
+Fernet structure stays classified as ciphertext through plaintext-slot normalization. If the task
+has no independent readable text, it fails closed without a recovery or routed-provider request.
+Independent readable text retains the existing mixed-content policy. Other fragment representations
+remain unsupported; this does not establish general token-split recovery or upstream multipart
+fidelity.
 
 ### Threat model
 
@@ -252,6 +327,8 @@ review, and memory-consolidation turns bypass caps.
 Caps only lower effort. They snap to the highest advertised rung at or below the cap. If a model has
 no effort control or no supported rung fits, opencodex removes the effort and lets the provider default
 apply. `max` and `ultra` are accepted, while the dashboard offers `low` through `xhigh`.
+
+Configured caps also apply to eligible native Chat Completions turns that carry no model effort pin. Provider wire mapping runs when a pin is applied or when a cap changes the value; a native caller value keeps its original wire spelling when neither happens.
 
 For a beginner-oriented explanation of v1, default, and v2 behavior, see
 [Sub-agent surfaces](/guides/sub-agent-surface/).

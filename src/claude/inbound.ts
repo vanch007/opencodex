@@ -17,7 +17,9 @@ export { resolveInboundModel, effortForThinkingBudget, effortFromOutputConfig, e
 import { AnthropicRequestError, isRec, type Rec } from "./inbound-records";
 import { resolveInboundModel, effortForThinkingBudget, effortFromOutputConfig, formatFromOutputConfig } from "./inbound-model-options";
 import { systemToInstructions, toolsToResponses, toolChoiceToResponses } from "./inbound-content-options";
+import { stabilizeClaudeInstructionsForPromptCache } from "./inbound-cache-stabilize";
 import { decodeReasoningEnvelope, encodeReasoningEnvelope, OCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
+import { inlineDocumentMarker } from "../responses/inline-document";
 import { createTranslatorBudget, type TranslatorBudget } from "../lib/translator-budget";
 
 
@@ -40,6 +42,26 @@ function imageBlockToInputImage(block: Rec): Rec | null {
   return null;
 }
 
+function documentTitle(block: Rec): string | undefined {
+  return typeof block.title === "string" && block.title.length > 0 ? block.title : undefined;
+}
+
+/** An Anthropic base64 document as the Responses `input_file` block that carries its bytes. */
+function documentBlockToInputFile(block: Rec): Rec | null {
+  const source = block.source;
+  if (!isRec(source) || source.type !== "base64") return null;
+  const mediaType = typeof source.media_type === "string" && source.media_type.length > 0
+    ? source.media_type
+    : "application/octet-stream";
+  if (typeof source.data !== "string" || source.data.length === 0) return null;
+  const title = documentTitle(block);
+  return {
+    type: "input_file",
+    file_data: `data:${mediaType};base64,${source.data}`,
+    ...(title !== undefined ? { filename: title } : {}),
+  };
+}
+
 function toolResultOutput(block: Rec): string | Rec[] {
   const isError = block.is_error === true;
   const content = block.content;
@@ -54,9 +76,11 @@ function toolResultOutput(block: Rec): string | Rec[] {
         const img = imageBlockToInputImage(item);
         if (img) out.push(img);
       } else if (item.type === "document") {
-        // Same marker as the user-message document case below: the model should see the
-        // attachment happened instead of an empty tool output.
-        out.push({ type: "input_text", text: `[document${typeof item.title === "string" ? `: ${item.title}` : ""}]` });
+        // Tool output has no structured document carrier on this route — the Responses tool
+        // output vocabulary has no input_file block, and every adapter's tool-result path
+        // flattens to text — so this keeps the #939 marker. The user-message branch below is
+        // where bytes survive. Recorded as the remaining half of #5212.
+        out.push({ type: "input_text", text: inlineDocumentMarker(documentTitle(item)) });
       }
     }
     if (isError) out.unshift({ type: "input_text", text: "[tool error]" });
@@ -94,6 +118,7 @@ export function effectiveBlockedSkillNames(cc?: Pick<OcxClaudeCodeConfig, "block
 /** Injected-skill payloads below this size are never stubbed (not worth it). */
 const SKILL_ELISION_MIN_CHARS = 10_000;
 const SKILL_TEXT_MARKER = "Base directory for this skill: ";
+const SKILL_TEXT_PATH_MAX_CHARS = 4_096;
 
 interface SkillElisionContext {
   /** Skill-tool call ids whose input names a blocked skill (result-body carrier). */
@@ -114,11 +139,15 @@ const NO_ELISION: SkillElisionContext = { callIds: new Set(), names: [] };
 function maybeElideSkillText(text: string, names: readonly string[]): string {
   if (names.length === 0 || text.length < SKILL_ELISION_MIN_CHARS) return text;
   if (!text.startsWith(SKILL_TEXT_MARKER)) return text;
-  const firstLineEnd = text.indexOf("\n");
-  const dir = text.slice(SKILL_TEXT_MARKER.length, firstLineEnd === -1 ? text.length : firstLineEnd).trim();
+  const pathStart = SKILL_TEXT_MARKER.length;
+  const pathPrefix = text.slice(pathStart, pathStart + SKILL_TEXT_PATH_MAX_CHARS + 1);
+  const firstLineEnd = pathPrefix.indexOf("\n");
+  if (firstLineEnd === -1 && pathPrefix.length > SKILL_TEXT_PATH_MAX_CHARS) return text;
+  const dir = pathPrefix.slice(0, firstLineEnd === -1 ? pathPrefix.length : firstLineEnd).trim();
   // Windows clients send `C:\Users\...\claude-api`; normalize separators before
   // basenaming (repo precedent: src/codex/inject.ts isOpencodexCatalogPath).
-  const base = dir.replace(/\\/g, "/").split("/").filter(Boolean).pop()?.toLowerCase() ?? "";
+  const normalizedDir = dir.replace(/\\/g, "/").replace(/\/+$/, "");
+  const base = normalizedDir.slice(normalizedDir.lastIndexOf("/") + 1).toLowerCase();
   if (!names.includes(base)) return text;
   return `[opencodex] '${base}' skill document bundle (${text.length} chars) elided for routed models `
     + "(claudeCode.blockedSkills). The skill is loaded; answer from general knowledge instead of citing the bundle.";
@@ -207,9 +236,12 @@ function userMessageToItems(content: unknown, input: Rec[], elide: SkillElisionC
         break;
       }
       case "document":
-        // No Responses equivalent for raw document blocks; surface the title so the
-        // model at least sees the attachment happened.
-        pending.push({ type: "input_text", text: `[document${typeof raw.title === "string" ? `: ${raw.title}` : ""}]` });
+        // A base64 document now rides the Responses input_file block, so a target with a
+        // counterpart receives the bytes instead of a sentence about them (#5212). Every other
+        // source is a reference this route cannot dereference, and keeps the marker #939
+        // introduced — which is also what a target with no document representation still sees.
+        pending.push(documentBlockToInputFile(raw)
+          ?? { type: "input_text", text: inlineDocumentMarker(documentTitle(raw)) });
         break;
       default:
         break; // thinking/redacted_thinking never appear in user messages; ignore unknowns
@@ -298,7 +330,10 @@ export interface ClaudeInboundTranslation {
  * Translate an Anthropic Messages request body into a /v1/responses request body.
  * Throws AnthropicRequestError (-> 400 invalid_request_error) on malformed input.
  */
-export function anthropicToResponsesBody(raw: unknown, cc?: OcxClaudeCodeConfig): Rec {
+export function anthropicToResponsesBody(
+  raw: unknown,
+  cc?: OcxClaudeCodeConfig,
+): Rec {
   return anthropicToResponsesTranslation(raw, cc).body;
 }
 
@@ -307,7 +342,11 @@ export function anthropicToResponsesBody(raw: unknown, cc?: OcxClaudeCodeConfig)
  * OUT-OF-BODY tuple (audit 133 R3#1 — an in-body marker would leak upstream through
  * the native Responses forward and 400).
  */
-export function anthropicToResponsesTranslation(raw: unknown, cc?: OcxClaudeCodeConfig, budget?: TranslatorBudget): ClaudeInboundTranslation {
+export function anthropicToResponsesTranslation(
+  raw: unknown,
+  cc?: OcxClaudeCodeConfig,
+  budget?: TranslatorBudget,
+): ClaudeInboundTranslation {
   const activeBudget = budget ?? createTranslatorBudget();
   try {
     return translateAnthropicRequest(raw, cc, activeBudget);
@@ -316,7 +355,11 @@ export function anthropicToResponsesTranslation(raw: unknown, cc?: OcxClaudeCode
   }
 }
 
-function translateAnthropicRequest(raw: unknown, cc: OcxClaudeCodeConfig | undefined, budget: TranslatorBudget): ClaudeInboundTranslation {
+function translateAnthropicRequest(
+  raw: unknown,
+  cc: OcxClaudeCodeConfig | undefined,
+  budget: TranslatorBudget,
+): ClaudeInboundTranslation {
   if (!isRec(raw)) throw new AnthropicRequestError("request body must be a JSON object");
   if (typeof raw.model !== "string" || raw.model.length === 0) {
     throw new AnthropicRequestError("model is required");
@@ -357,7 +400,32 @@ function translateAnthropicRequest(raw: unknown, cc: OcxClaudeCodeConfig | undef
     stream: raw.stream === true,
   };
 
-  if (systemParts.length > 0) body.instructions = systemParts.join("\n\n");
+  const joinedSystem = systemParts.length > 0 ? systemParts.join("\n\n") : "";
+  const stabilizePromptCache = cc?.stabilizePromptCache === true;
+  // Desktop fallback hashes raw systemParts unless the caller opted into
+  // harness cleanup. Opt-in then hashes the same string as body.instructions.
+  let cacheSystem: string | string[] = systemParts;
+  if (joinedSystem) {
+    if (stabilizePromptCache) {
+      // Claude Code appends growing <total_tokens>N tokens left</total_tokens>
+      // footers (and occasional TaskCreate nudges) into system text. That churn
+      // breaks Muse/Go prefix cache on the Responses instructions prefix even
+      // when tools stay stable. Relocation is caller-opted, not inferred from
+      // a matching suffix or metadata.user_id.
+      const stabilized = stabilizeClaudeInstructionsForPromptCache(joinedSystem);
+      if (stabilized.instructions) body.instructions = stabilized.instructions;
+      if (stabilized.dynamicNotice) {
+        input.push({
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: stabilized.dynamicNotice }],
+        });
+      }
+      cacheSystem = stabilized.instructions;
+    } else {
+      body.instructions = joinedSystem;
+    }
+  }
 
   const tools = toolsToResponses(raw.tools);
   if (tools) body.tools = tools;
@@ -395,11 +463,14 @@ function translateAnthropicRequest(raw: unknown, cc: OcxClaudeCodeConfig | undef
     // Exact-prefix matching still isolates content; the key only steers routing
     // affinity. Callers must NOT synthesize a session_id header from this fallback
     // (audit 133 R2#3).
+    // Outside opt-in, hash the raw systemParts array (pre-stabilize Desktop
+    // key). Opt-in hashes the same string used for body.instructions so the
+    // key tracks the cacheable prefix after peel.
     body.prompt_cache_key = createHash("sha256")
       .update(canonicalJson({
         version: 2,
         model: body.model,
-        system: systemParts,
+        system: cacheSystem,
         tools: Array.isArray(body.tools) ? body.tools : [],
       }))
       .digest("hex").slice(0, 32);

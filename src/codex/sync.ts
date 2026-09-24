@@ -14,12 +14,13 @@ import {
 import { admitCodexWrite, type CodexAdmission } from "./admission";
 import type { CodexCatalogSyncOptions } from "./catalog/sync";
 import { resetCodexAppServerCatalogStateCache } from "./app-server-processes";
+import { providerUsesReasoningMetadata, refreshReasoningMetadata } from "../providers/reasoning-metadata";
 
 export interface CodexSyncResult {
   /**
    * `skipped` is policy truth, never evidence that Codex was written.
    * `catalog-only` means an explicit sync refreshed the catalog/cache while
-   * Codex injection stayed OFF; config and history were not touched.
+   * config/history injection was skipped (integration OFF, or externally owned).
    */
   status: "applied" | "skipped" | "catalog-only" | "refused";
   ok: boolean;
@@ -32,6 +33,12 @@ export interface CodexSyncResult {
   catalogExists: boolean;
   catalogWritten: boolean;
   cacheSynced: boolean;
+  /**
+   * Whether the catalog owner committed a validated catalog or refused the
+   * refresh. Only a `catalog-only` result carries it; `ok` already answers the
+   * question for callers that do not care which half refused.
+   */
+  refreshOutcome?: "committed" | "refused";
   message: string;
   warning?: string;
   comboOmissions?: ComboCatalogOmission[];
@@ -46,7 +53,8 @@ export interface CodexSyncOptions {
    * the OpenCodex catalog without injection. When set, the sync still refreshes
    * the catalog and models cache even if the Codex integration toggle is OFF or
    * an external `model_provider` owns config.toml. Config/history injection is
-   * skipped in those cases, so the behavior is harmless to a native home.
+   * skipped in those two cases. A paginated-history refusal is NOT one of them:
+   * the injector writes config and stands only its relabel unit down.
    */
   catalogEvenWhenNotInjected?: boolean;
 }
@@ -60,12 +68,20 @@ interface CodexSyncDeps {
   admitCodexWrite?: () => CodexSyncAdmission;
   currentExternalCodexModelProvider?: typeof currentExternalCodexModelProvider;
   collectCodexHomeDiagnostic?: typeof collectOrcaCodexHomeDiagnostic;
+  refreshReasoningMetadata?: typeof refreshReasoningMetadata;
 }
 
 const defaultDeps: CodexSyncDeps = {
   refreshCodexModelCatalog,
   injectCodexConfig,
+  refreshReasoningMetadata,
 };
+
+async function refreshReasoningMetadataForSync(config: OcxConfig, deps: CodexSyncDeps): Promise<void> {
+  if (Object.values(config.providers).some(providerUsesReasoningMetadata)) {
+    await deps.refreshReasoningMetadata?.({ waitMs: 2_000 });
+  }
+}
 
 function reportCodexHomeTarget(
   log: Pick<Console, "log" | "error"> | null,
@@ -203,6 +219,12 @@ export async function syncModelsToCodex(
   // working catalog/cache into the partial result of an otherwise unnecessary refresh.
   const preflight = await deps.injectCodexConfig(p, config, { validateOnly: true });
   if (!preflight.success) {
+    // A paginated-history refusal used to be downgraded here to a `catalog-only` success.
+    // That is what made the model picker regression silent: the catalog file was rewritten
+    // and reported synchronized while config.toml kept no provider table and no catalog
+    // path, so Codex offered only its native models. The injector now writes config and
+    // stands the relabel unit down instead, so nothing reaches this branch for that reason
+    // and a surviving refusal is a real config/integrity failure again.
     log?.error(preflight.message);
     reportCodexHomeTarget(log, deps.collectCodexHomeDiagnostic ?? collectOrcaCodexHomeDiagnostic);
     return {
@@ -221,6 +243,7 @@ export async function syncModelsToCodex(
   }
 
   applyProxyEnv(config); // `ocx ensure`/`ocx sync` fetch provider models outside the server process
+  await refreshReasoningMetadataForSync(config, deps);
   let added = 0;
   let catalogPath: string | null = null;
   let catalogPathForInjection: string | null | undefined;
@@ -275,6 +298,12 @@ export async function syncModelsToCodex(
   }
   if (result.success) log?.log(result.message);
   else log?.error(result.message);
+  // The config was written; only the relabel unit stood down. Carry that as a warning so a
+  // caller reading the structured result sees it without parsing the display message.
+  if (result.success && result.historyPreflightFailureReason) {
+    const historyWarning = `Codex conversation-history relabel left to Codex's native writer: ${result.historyPreflightFailureReason}.`;
+    warning = warning ? `${warning} ${historyWarning}` : historyWarning;
+  }
   reportCodexHomeTarget(log, deps.collectCodexHomeDiagnostic ?? collectOrcaCodexHomeDiagnostic);
   const projectConfigWarnings = printProjectCodexConfigWarnings(log, { cwd: process.cwd() });
   return {
@@ -308,6 +337,7 @@ async function refreshCatalogForSync(
   catalogWritten: boolean;
   cacheSynced: boolean;
   comboOmissions: ComboCatalogOmission[];
+  refreshOutcome?: "committed" | "refused";
   warning?: string;
 }> {
   let added = 0;
@@ -316,9 +346,12 @@ async function refreshCatalogForSync(
   let catalogWritten = false;
   let cacheSynced = false;
   let warning: string | undefined;
+  let refreshOutcome: "committed" | "refused" | undefined;
   let comboOmissions: ComboCatalogOmission[] = [];
   try {
+    await refreshReasoningMetadataForSync(config, deps);
     const cat = await deps.refreshCodexModelCatalog(config, undefined, catalogOptions);
+    refreshOutcome = cat.refreshOutcome;
     added = cat.added;
     catalogExists = cat.catalogExists;
     catalogWritten = cat.catalogWritten;
@@ -340,5 +373,6 @@ async function refreshCatalogForSync(
     warning = `catalog sync skipped: ${e instanceof Error ? e.message : String(e)}`;
     log?.error(warning);
   }
-  return { added, catalogPath, catalogExists, catalogWritten, cacheSynced, comboOmissions, ...(warning ? { warning } : {}) };
+  return { added, catalogPath, catalogExists, catalogWritten, cacheSynced, comboOmissions,
+    ...(refreshOutcome ? { refreshOutcome } : {}), ...(warning ? { warning } : {}) };
 }

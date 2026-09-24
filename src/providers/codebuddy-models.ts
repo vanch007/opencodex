@@ -21,6 +21,9 @@ export const CODEBUDDY_GLOBAL_MODELS = [
   "gpt-5.6-sol",
   "gpt-5.6-terra",
   "gpt-5.6-luna",
+  // 260923 preemptive: GPT-6 Sol and Luna (OpenAI announced 2026-09-22) added ahead of this provider's own catalog; mirrors the GPT-5.6 Sol/Luna rows.
+  "gpt-6-sol",
+  "gpt-6-luna",
   "gpt-5.5",
   "gpt-5.4",
   "gpt-5.3-codex",
@@ -35,7 +38,6 @@ export const CODEBUDDY_GLOBAL_MODELS = [
 /** China (`internal`) session models from the official internal manifest (text/chat models only). */
 export const CODEBUDDY_CN_MODELS = [
   "default",
-  "deepseek-v4-pro",
   "deepseek-v4-flash",
   "minimax-m3",
   "minimax-m2.7",
@@ -71,6 +73,8 @@ export const CODEBUDDY_GLOBAL_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "gpt-5.6-sol": 1_000_000,
   "gpt-5.6-terra": 1_000_000,
   "gpt-5.6-luna": 1_000_000,
+  "gpt-6-sol": 1_000_000,
+  "gpt-6-luna": 1_000_000,
   "gpt-5.5": 1_000_000,
   "gpt-5.4": 272_000,
   "gpt-5.3-codex": 272_000,
@@ -91,6 +95,8 @@ export const CODEBUDDY_GLOBAL_MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = 
   "gpt-5.6-sol": 128_000,
   "gpt-5.6-terra": 128_000,
   "gpt-5.6-luna": 128_000,
+  "gpt-6-sol": 128_000,
+  "gpt-6-luna": 128_000,
   "gpt-5.5": 72_000,
   "gpt-5.4": 128_000,
   "gpt-5.3-codex": 128_000,
@@ -107,6 +113,8 @@ export const CODEBUDDY_GLOBAL_MODEL_REASONING_EFFORTS: Record<string, string[]> 
   "gpt-5.6-sol": ["low", "medium", "high", "xhigh"],
   "gpt-5.6-terra": ["low", "medium", "high", "xhigh"],
   "gpt-5.6-luna": ["low", "medium", "high", "xhigh"],
+  "gpt-6-sol": ["low", "medium", "high", "xhigh"],
+  "gpt-6-luna": ["low", "medium", "high", "xhigh"],
   "glm-5.3": ["low", "high", "max"],
   "glm-5.2": ["high", "xhigh"],
 };
@@ -115,13 +123,14 @@ export const CODEBUDDY_GLOBAL_MODEL_DEFAULT_REASONING_EFFORTS: Record<string, st
   "gpt-5.6-sol": "high",
   "gpt-5.6-terra": "high",
   "gpt-5.6-luna": "high",
+  "gpt-6-sol": "high",
+  "gpt-6-luna": "high",
   "glm-5.3": "high",
   "glm-5.2": "high",
 };
 
 export const CODEBUDDY_CN_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "default": 200_000,
-  "deepseek-v4-pro": 1_000_000,
   "deepseek-v4-flash": 1_000_000,
   "minimax-m3": 512_000,
   "minimax-m2.7": 200_000,
@@ -142,7 +151,6 @@ export const CODEBUDDY_CN_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 
 export const CODEBUDDY_CN_MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   "default": 24_000,
-  "deepseek-v4-pro": 50_000,
   "deepseek-v4-flash": 50_000,
   "minimax-m3": 128_000,
   "minimax-m2.7": 48_000,

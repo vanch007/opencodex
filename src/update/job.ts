@@ -24,8 +24,15 @@ import {
 import { stopWinswService } from "../lib/winsw";
 import { listListenPids, reclaimListenPort, scanListenPids, type ListenPidScan } from "../server/port-reclaim";
 import { dropWindowsTcpRowsForLocalPort } from "../server/windows-tcp-drop";
-import { isOpencodexHealthz, probeHostname, proxyIdentityAt, type HealthzIdentity } from "../server/proxy-liveness";
+import {
+  isHealthzVersion,
+  isOpencodexHealthz,
+  probeHostname,
+  proxyIdentityAt,
+  type HealthzIdentity,
+} from "../server/proxy-liveness";
 import { isServiceInstalled, isServiceViable, readServiceBackend, stopWindows } from "../service";
+import { runUpdateRestartWithOwnershipLease, type ServiceOwnershipResolution } from "./restart-ownership";
 import {
   type Channel,
   type Installer,
@@ -44,6 +51,7 @@ import type { PnpmGlobalOwner } from "./pnpm-global-install.mjs";
 import { isNewer } from "./notify";
 import { isRealBunBinary } from "../lib/bun-binary-validator.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "./tray-update-plan.mjs";
+import { GUI_UPDATE_FAILURE_NEXT_STEP } from "./update-failure-guidance.mjs";
 import {
   npmCachePreflightFailureMessage,
   runNpmCachePreflight,
@@ -267,19 +275,6 @@ function ensureJobDir(): void {
  * TYPE and size — enough to tell a reader what class of failure occurred — and never its text,
  * which is where the paths and account names live.
  */
-/**
- * A version string we are willing to repeat in a persisted field.
- *
- * Semver plus an optional prerelease/build tail, capped in length. Anything else is dropped
- * rather than logged: `/healthz` is answered by whatever holds the port, so its `version` is
- * external input on the same footing as an error message.
- */
-function isVersionLike(value: unknown): value is string {
-  return typeof value === "string"
-    && value.length <= 64
-    && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(value);
-}
-
 function withheldSummary(error: unknown): string {
   // `error.name` is writable, so it is external text like the message. A fixed classification
   // is the only part of an unknown error we can state without repeating something we were
@@ -983,6 +978,11 @@ export interface RestartIo {
   spawnStart?: (job: UpdateJobState, installer: Installer, port?: number, launcher?: string) => void;
   /** The package launcher verified after a pnpm group switch or rollback. */
   packageLauncherPathFn?: () => string;
+  /** Exercise pinned-start retries without spawning, reclaiming, or killing real processes. */
+  spawnDetachedStartFn?: typeof spawnDetachedStart;
+  preparePortForPinnedStartFn?: typeof preparePortForPinnedStart;
+  waitForGhostListenClearFn?: typeof waitForGhostListenClear;
+  killProxyFn?: typeof killProxy;
   serviceInstalledFn?: () => boolean;
   /**
    * After a service reinstall exits 0, only trust the service path when this is true.
@@ -1332,9 +1332,20 @@ async function restartAfterUpdate(
     }
   }
   const attempts = 3;
+  const now = io.now ?? (() => Date.now());
+  const spawnPinnedStart = io.spawnDetachedStartFn ?? spawnDetachedStart;
+  const preparePort = io.preparePortForPinnedStartFn ?? preparePortForPinnedStart;
+  const waitForGhost = io.waitForGhostListenClearFn ?? waitForGhostListenClear;
   // Longer than published hard-pin reclaim (30s) so a slow start can still report healthy.
   const perAttemptHealthMs = 70_000;
   let lastChild: ChildProcess | null = null;
+  const killSpawnAttempt = (child: ChildProcess | null): void => {
+    // A numeric PID can be reused once this particular child has exited.
+    if (!child?.pid || child.exitCode !== null || child.signalCode !== null) return;
+    if (aliveFn(child.pid)) {
+      try { (io.killProxyFn ?? killProxy)(child.pid); } catch { /* best-effort */ }
+    }
+  };
   for (let attempt = 1; attempt <= attempts; attempt++) {
     if (attempt > 1) {
       updateJob(
@@ -1343,13 +1354,11 @@ async function restartAfterUpdate(
         `Pinned start attempt ${attempt - 1} did not become healthy on port ${port}; `
           + `retrying (${attempt}/${attempts}).`,
       );
-      if (lastChild?.pid && aliveFn(lastChild.pid)) {
-        try { killProxy(lastChild.pid); } catch { /* best-effort */ }
-      }
+      killSpawnAttempt(lastChild);
       lastChild = null;
     }
-    preparePortForPinnedStart(job, port, listPids, aliveFn, verifyOcx);
-    const ready = await waitForGhostListenClear(
+    preparePort(job, port, listPids, aliveFn, verifyOcx);
+    const ready = await waitForGhost(
       port,
       hostname,
       listPids,
@@ -1365,17 +1374,25 @@ async function restartAfterUpdate(
       );
       continue;
     }
-    lastChild = spawnDetachedStart(job, job.installer, port, launcher);
-    const healthDeadline = Date.now() + perAttemptHealthMs;
-    while (Date.now() < healthDeadline) {
+    const child = spawnPinnedStart(job, job.installer, port, launcher);
+    lastChild = child;
+    const retireChild = () => {
+      if (lastChild === child) lastChild = null;
+      child.removeListener("exit", retireChild);
+      child.removeListener("error", retireChild);
+      child.removeListener("close", retireChild);
+    };
+    child.once("exit", retireChild);
+    child.once("error", retireChild);
+    child.once("close", retireChild);
+    const healthDeadline = now() + perAttemptHealthMs;
+    while (now() < healthDeadline) {
       if (await probe(port, hostname)) return;
       await sleep(500);
     }
   }
   // Exhausted retries: do not leave a hung pinned-start child owning the port.
-  if (lastChild?.pid && aliveFn(lastChild.pid)) {
-    try { killProxy(lastChild.pid); } catch { /* best-effort */ }
-  }
+  killSpawnAttempt(lastChild);
 }
 
 /** Compact listen-holder summary for update-job logs when reclaim fails. */
@@ -1566,7 +1583,7 @@ async function defaultProbeProxyIdentity(
       // `/healthz` is answered by whatever is listening on that port, so a hostile or confused
       // responder can return any string here — and the restart-evidence reasons below
       // interpolate it into a persisted field. A version is a version or it is nothing.
-      ...(isVersionLike(body?.version) ? { version: body.version } : {}),
+      ...(isHealthzVersion(body?.version) ? { version: body.version } : {}),
     };
   } catch {
     return null;
@@ -1782,6 +1799,8 @@ export interface GuiUpdateWorkerIo {
   resolvePnpmActiveLauncherFn?: (owner: PnpmGlobalOwner) => string | null;
   /** Restart seams used by focused worker tests; the verified launcher is always injected. */
   restartIo?: RestartIo;
+  /** Resolves who owns the runtime; defaults to the shared service install state. */
+  resolveOwnershipFn?: () => ServiceOwnershipResolution;
   runCommandFn?: (
     job: UpdateJobState,
     bin: string,
@@ -1924,7 +1943,7 @@ export async function runGuiUpdateWorker(
         status: "failed",
         exitCode: result.status,
         signal: result.signal,
-        error: `update command failed (${result.status ?? "?"})`,
+        error: `update command failed (${result.status ?? "?"}). ${GUI_UPDATE_FAILURE_NEXT_STEP}`,
       });
       return;
     }
@@ -1945,11 +1964,12 @@ export async function runGuiUpdateWorker(
     }
 
     if (restart) {
-      job = updateJob(job, { status: "restarting" }, "Update installed. Restarting proxy...");
-      if (!(await finishGuiUpdateRestart(job, captured, check.installer, {
-        ...io.restartIo,
-        packageLauncherPathFn: () => activeLauncher,
-      }))) return;
+      const outcome = await runUpdateRestartWithOwnershipLease(io.resolveOwnershipFn, async () => {
+        job = updateJob(job!, { status: "restarting" }, "Update installed. Restarting proxy...");
+        return finishGuiUpdateRestart(job!, captured, check.installer, { ...io.restartIo, packageLauncherPathFn: () => activeLauncher });
+      });
+      if (outcome.kind === "veto") { updateJob(job, { status: "succeeded", restarted: false }, outcome.notice); return; }
+      if (!outcome.value) return;
       updateJob(job, { status: "succeeded", restarted: true }, "Restart requested and proxy is healthy.");
       return;
     }

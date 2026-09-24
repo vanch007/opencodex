@@ -99,7 +99,7 @@ beforeEach(() => {
           model: preferredModel,
           effort: null,
           available: [
-            { provider: "openai", model: "gpt-5.4", namespaced: "gpt-5.4" },
+            { provider: "openai", model: "gpt-5.5", namespaced: "gpt-5.5" },
             { provider: "anthropic", model: "claude-sonnet-4-6", namespaced: "anthropic/claude-sonnet-4-6" },
           ],
           efforts: [],
@@ -250,9 +250,6 @@ test.each(failedFallbackReads)("cold roster survives fallback $name and recovers
   expect(putBodies()).toEqual([]);
 
   await click(labelledButton(container, en["sub.workspace.addToFeatured"].replace("{m}", "a-3")));
-  const rosterSaveRow = container.querySelector(".swi-save-row");
-  if (!rosterSaveRow) throw new Error("Roster Save row not found");
-  await click(saveButton(rosterSaveRow));
   expect(putBodies(ROSTER_PATH)).toEqual([{ models: ["a-1", "a-3"] }]);
   expect(cached()).not.toHaveProperty("fallback");
 
@@ -300,10 +297,8 @@ test("fallback discovery excludes roster-only stale choices without losing confi
   const listbox = testWindow.document.getElementById(trigger.getAttribute("aria-controls") ?? "");
   expect(listbox?.textContent).not.toContain("retired-provider/other-model");
   await click(trigger);
-  const rosterSaveRow = container.querySelector(".swi-save-row");
-  if (!rosterSaveRow) throw new Error("Roster Save row not found");
-  await click(saveButton(rosterSaveRow));
-  expect(putBodies(ROSTER_PATH)).toEqual([{ models: [UNAVAILABLE_MODEL, "a-1"] }]);
+  // Nothing in the roster changed, so nothing was saved for it.
+  expect(putBodies(ROSTER_PATH)).toEqual([]);
   await click(saveButton());
   expect(putBodies()).toEqual([{ models: [UNAVAILABLE_MODEL, "a-2"], pollMs: 45_000 }]);
 });
@@ -325,9 +320,6 @@ test.each([503, 200])("fresh roster choices stay independent of cached fallback 
   expect(saveButton().disabled).toBe(status === 503);
   expect(labelledButton(editor(), en["sub.fallbackAdd"]).disabled).toBe(status === 503);
   await click(labelledButton(container, en["sub.workspace.addToFeatured"].replace("{m}", "a-2")));
-  const rosterSaveRow = container.querySelector(".swi-save-row");
-  if (!rosterSaveRow) throw new Error("Roster Save row not found");
-  await click(saveButton(rosterSaveRow));
   expect(putBodies(ROSTER_PATH)).toEqual([{ models: ["a-1", "a-2"] }]);
   expect(cached()?.available).toEqual(["a-1", "a-2"]);
   expect(cached()?.fallbackAvailable).toEqual(["a-1"]);
@@ -510,7 +502,7 @@ test("a failed fallback PUT retains the editable draft and leaves the committed 
   expect(cached()?.pollMs).toBe(90_000);
 });
 
-test("a successful fallback save updates committed session data without committing a roster draft", async () => {
+test("a successful fallback save updates committed session data and keeps the autosaved roster", async () => {
   await mount();
   await click(labelledButton(container, en["sub.workspace.addToFeatured"].replace("{m}", "a-3")));
   await addFallback("a-3");
@@ -518,20 +510,17 @@ test("a successful fallback save updates committed session data without committi
   await click(saveButton());
 
   expect(putBodies()).toEqual([{ models: ["a-2", "a-3"], pollMs: 120_000 }]);
-  expect(putBodies(ROSTER_PATH)).toEqual([]);
-  expect(cached()).toEqual({ available, fallbackAvailable: available, chosen: ["a-1"], fallback: ["a-2", "a-3"], pollMs: 120_000 });
+  expect(putBodies(ROSTER_PATH)).toEqual([{ models: ["a-1", "a-3"] }]);
+  expect(cached()).toEqual({ available, fallbackAvailable: available, chosen: ["a-1", "a-3"], fallback: ["a-2", "a-3"], pollMs: 120_000 });
   expectOrder(["a-2", "a-3"]);
   expect(container.querySelectorAll(".swi-featured-row").length).toBe(2);
 });
 
-test("independent roster Save never caches an unsaved fallback draft", async () => {
+test("independent roster autosave never caches an unsaved fallback draft", async () => {
   await mount();
   await addFallback("a-3");
   await changePollMs(90_000);
   await click(labelledButton(container, en["sub.workspace.addToFeatured"].replace("{m}", "a-3")));
-  const rosterSaveRow = container.querySelector(".swi-save-row");
-  if (!rosterSaveRow) throw new Error("Roster Save row not found");
-  await click(saveButton(rosterSaveRow));
 
   expect(putBodies(ROSTER_PATH)).toEqual([{ models: ["a-1", "a-3"] }]);
   expect(putBodies()).toEqual([]);
@@ -551,13 +540,10 @@ test("remount shows the committed fallback and roster while a fresh fallback GET
   await changePollMs(120_000);
   await click(saveButton());
 
-  // A later roster save must not commit these newer fallback edits.
+  // A later roster autosave must not commit these newer fallback edits.
   await click(rowButton(0, "sub.removeAria", "a-2"));
   await changePollMs(90_000);
   await click(labelledButton(container, en["sub.workspace.addToFeatured"].replace("{m}", "a-3")));
-  const rosterSaveRow = container.querySelector(".swi-save-row");
-  if (!rosterSaveRow) throw new Error("Roster Save row not found");
-  await click(saveButton(rosterSaveRow));
   expectOrder(["a-3"]);
   expect(pollInput().value).toBe("90000");
 
@@ -621,9 +607,6 @@ test("a legacy cache keeps fallback disabled through GET failure, roster Save, a
   await assertBlocked();
 
   await click(labelledButton(container, en["sub.workspace.addToFeatured"].replace("{m}", "a-3")));
-  const rosterSaveRow = container.querySelector(".swi-save-row");
-  if (!rosterSaveRow) throw new Error("Roster Save row not found");
-  await click(saveButton(rosterSaveRow));
   const savedRosterCache = { available, chosen: ["a-1", "a-3"] };
   expect(putBodies(ROSTER_PATH)).toEqual([{ models: ["a-1", "a-3"] }]);
   await assertBlocked(savedRosterCache);
@@ -735,7 +718,7 @@ const compatibilityCases: Array<{
   keepNative: boolean;
   warning: boolean;
 }> = [
-  { name: "native preferred model", model: "gpt-5.4", enabled: true, mode: "v2", keepNative: false, warning: false },
+  { name: "native preferred model", model: "gpt-5.5", enabled: true, mode: "v2", keepNative: false, warning: false },
   { name: "routed preferred model on the default surface", model: "anthropic/claude-sonnet-4-6", enabled: false, mode: "default", keepNative: false, warning: true },
   { name: "routed preferred model on V1", model: "anthropic/claude-sonnet-4-6", enabled: false, mode: "v1", keepNative: false, warning: false },
   { name: "forced V2 preserving native V1 with global V2 disabled", model: "anthropic/claude-sonnet-4-6", enabled: false, mode: "v2", keepNative: true, warning: false },

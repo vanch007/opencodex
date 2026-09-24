@@ -10,7 +10,7 @@ description: 멀티 에이전트 표면, 위임 안내, 선호 모델, 대체 �
 | 필드 | 형식 | 기본값 | 의미 |
 | --- | --- | --- | --- |
 | `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1`은 카탈로그의 모든 모델에 v1을 표시하고, `v2`는 모든 모델에 v2를 표시합니다. `default`는 상위 고정값(Sol/Terra는 v2, Luna는 v1)을 복원하고, 그 외에는 네이티브 `multi_agent_v2` 플래그를 따릅니다. 새 세션에 적용됩니다. |
-| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5` | 최대 다섯 개의 bare native id, account-qualified `<selector>/<native-openai-model>` id 또는 routed `provider/model` id를 서브에이전트 선택기에서 우선 표시합니다. Subagents 페이지는 bare native와 routed id만 제공하며 저장할 때 exact account-qualified 선택을 제외합니다. exact 선택은 `ocx agent subagents set`을 사용하거나 설정을 직접 편집하세요. [Astra 최초 업그레이드](/reference/configuration/agents/#astra-roster-upgrade) 이후에는 빈 목록도 그대로 보존됩니다. |
+| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna` | 최대 다섯 개의 bare native id, account-qualified `<selector>/<native-openai-model>` id 또는 routed `provider/model` id를 서브에이전트 선택기에서 우선 표시합니다. Subagents 페이지는 bare native와 routed id만 제공하며 저장할 때 exact account-qualified 선택을 제외합니다. exact 선택은 `ocx agent subagents set`을 사용하거나 설정을 직접 편집하세요. [Astra 최초 업그레이드](/reference/configuration/agents/#astra-roster-upgrade) 이후에는 빈 목록도 그대로 보존됩니다. |
 | `injectionModel?` | `string` | — | 프록시가 작성한 v2 위임 안내에서 사용하는 선호 네이티브 또는 라우팅된 서브에이전트 모델입니다. |
 | `injectionEffort?` | `string` | — | 선호 노력(`low`부터 `ultra`까지)입니다. `injectionModel`이 있을 때만 의미가 있습니다. |
 | `injectionPrompt?` | `string` | — | 내장 v2 안내 본문을 대체합니다. `{{model}}`, `{{effort}}`, `{{roster}}`, `{{fallback}}`를 지원합니다. `injectionModel`만 설정되어 있어도 사용자 정의 프롬프트가 발동합니다. |
@@ -72,9 +72,9 @@ opencodex는 비활성, 라우팅 불가, 비정상, 쿨다운 중, 또는 할�
   "injectionModel": "gpt-5.5",
   "injectionEffort": "high",
   "syncCodexSubagentDefaults": true,
-  "subagentModelFallback": ["gpt-5.4-mini"],
+  "subagentModelFallback": ["gpt-5.6-luna"],
   "subagentModelFallbackByModel": {
-    "gpt-5.5": ["gpt-5.4-mini"]
+    "gpt-5.5": ["gpt-5.6-luna"]
   },
   "subagentModelFallbackPollMs": 60000,
   "subagentEffortCap": "high"
@@ -86,5 +86,7 @@ opencodex는 비활성, 라우팅 불가, 비정상, 쿨다운 중, 또는 할�
 상한은 v2 협업 기능에만 적용됩니다. 메인 턴은 도구가 v2를 노출할 때 적격이 되고, 하위 턴은 leaf 도구가 더 이상 협업을 노출하지 않더라도 `x-codex-turn-metadata` 안에 codex-rs의 정확한 `x-openai-subagent: collab_spawn` 또는 `"subagent_kind": "thread_spawn"` 표시가 있으면 적격이 됩니다. V1 메인 턴, `multiAgentMode: "v1"`, compaction, review, memory-consolidation 턴은 상한을 적용받지 않습니다.
 
 상한은 노력만 낮춥니다. 모델이 광고한 단계 중 상한 이하에서 가장 높은 단계로 맞춥니다. 모델에 노력 제어가 없거나 맞는 지원 단계가 없으면, opencodex는 노력을 제거하고 제공자 기본값을 적용합니다. `max`와 `ultra`는 허용되며, 대시보드는 `low`부터 `xhigh`까지 제공합니다.
+
+모델 effort pin이 없어도 적용 대상 native Chat Completions 요청에는 설정된 상한이 적용됩니다. pin을 적용하거나 상한이 값을 바꾼 경우에 제공자 전송 값으로 매핑하며, 둘 다 없으면 호출자 값은 원래 표기를 유지합니다.
 
 v1, default, v2 동작에 대한 초보자용 설명은 [Sub-agent surfaces](/guides/sub-agent-surface/)를 참고하세요.

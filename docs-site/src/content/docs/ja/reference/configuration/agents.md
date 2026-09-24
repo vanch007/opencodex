@@ -10,7 +10,7 @@ description: マルチエージェント サーフェス、委任ガイダンス
 |フィールド |タイプ |デフォルト |意味 |
 | --- | --- | --- | --- |
 | `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` はすべてのカタログ モデルを v1 としてスタンプします。 `v2` はすべてのモデルを v2 としてスタンプします。 `default` はアップストリーム ピン (Sol/Terra v2、Luna v1) を復元し、それ以外の場合はネイティブの `multi_agent_v2` フラグに従います。新しいセッションに適用されます。 |
-| `subagentModels?` | `string[]` | `gpt-6-astra`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.5` |最大 5 つの bare native id、account-qualified `<selector>/<native-openai-model>` id、または routed `provider/model` id をサブエージェント ピッカーで優先表示します。Subagents ページで選べるのは bare native id と routed id だけで、保存時には exact account-qualified の選択が除外されます。exact の選択には `ocx agent subagents set` を使用するか、設定を直接編集してください。[Astra への一度限りの移行](/reference/configuration/agents/#astra-roster-upgrade)後は、明示的な空リストも保持されます。 |
+| `subagentModels?` | `string[]` | `gpt-6-astra`、`gpt-6-sol`、`gpt-6-luna` |最大 5 つの bare native id、account-qualified `<selector>/<native-openai-model>` id、または routed `provider/model` id をサブエージェント ピッカーで優先表示します。Subagents ページで選べるのは bare native id と routed id だけで、保存時には exact account-qualified の選択が除外されます。exact の選択には `ocx agent subagents set` を使用するか、設定を直接編集してください。[Astra への一度限りの移行](/reference/configuration/agents/#astra-roster-upgrade)後は、明示的な空リストも保持されます。 |
 | `injectionModel?` | `string` | — |プロキシ作成の v2 委任ガイダンスで使用される、優先されるネイティブまたはルーティングされたサブエージェント モデル。 |
 | `injectionEffort?` | `string` | — |優先努力 (`low` ～ `ultra`)。`injectionModel` でのみ意味があります。 |
 | `injectionPrompt?` | `string` | — | 組み込みの v2 ガイダンス本文を置き換えます。`{{model}}`、`{{effort}}`、`{{roster}}`、`{{fallback}}`をサポートします。`injectionModel` が設定されていればカスタムプロンプトが生成されます。 |
@@ -72,9 +72,9 @@ opencodex は、無効、ルーティング不能、異常、冷却期間、ま�
   "injectionModel": "gpt-5.5",
   "injectionEffort": "high",
   "syncCodexSubagentDefaults": true,
-  "subagentModelFallback": ["gpt-5.4-mini"],
+  "subagentModelFallback": ["gpt-5.6-luna"],
   "subagentModelFallbackByModel": {
-    "gpt-5.5": ["gpt-5.4-mini"]
+    "gpt-5.5": ["gpt-5.6-luna"]
   },
   "subagentModelFallbackPollMs": 60000,
   "subagentEffortCap": "high"
@@ -86,5 +86,7 @@ opencodex は、無効、ルーティング不能、異常、冷却期間、ま�
 キャップは v2 コラボレーション機能にのみ適用されます。メイン ターンは、そのツールが v2 を公開するときに資格を持ちますが、子ターンは、リーフ ツールがコラボレーションを公開しなくなった場合でも、`x-codex-turn-metadata` に正確な codex-rs `x-openai-subagent: collab_spawn` または `"subagent_kind": "thread_spawn"` マーカーが含まれるときに資格を持ちます。 V1 メイン ターン、`multiAgentMode: "v1"`、圧縮、レビュー、およびメモリ統合ターンはバイパス キャップです。
 
 キャップは労力を軽減するだけです。これらは、キャップまたはキャップの下で宣伝されている最も高い段にスナップします。モデルにエフォート制御がない場合、またはサポートされているラングフィットがない場合、opencodex はエフォートを削除し、プロバイダーのデフォルトを適用します。 `max` および `ultra` が受け入れられますが、ダッシュボードでは `low` から `xhigh` が提供されます。
+
+モデルの effort pin がなくても、対象のネイティブ Chat Completions ターンには設定された上限が適用されます。pin を適用した場合、または上限で値を変更した場合にプロバイダーの送信値へ変換し、どちらも起きない呼び出し元の値は元の表記を維持します。
 
 v1、デフォルト、および v2 の動作に関する初心者向けの説明については、「[サブエージェントサーフェス](/guides/sub-agent-surface/)」を参照してください。

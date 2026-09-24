@@ -179,7 +179,7 @@ kurtarılan metni döndürdüğü için bayt bayt doğruluk garanti edilmez. Gen
 anahtarlı proxy arayanlarını reddeder ve herhangi bir arızada
 `unreadable_encrypted_agent_task`'i korur. Tam güven sınırı ve yapılandırma için
 [Ajan yapılandırması: Şifrelenmiş v2 görev
-kurtarma](/tr/reference/configuration/agents/#encrypted-v2-task-recovery)
+kurtarma](/tr/reference/configuration/agents/#şifrelenmiş-v2-görev-kurtarma)
 bölümüne bakın. Kombo yönlendirmesi değişmeden kalır ve şifrelenmiş görevler
 için yalnızca kurallı yerel ChatGPT hedeflerini değerlendirmeye devam eder.
 
@@ -214,7 +214,7 @@ kullanın:
 ocx agent status
 ocx agent injection set --model anthropic/claude-sonnet-5 --effort xhigh
 ocx agent subagents set gpt-5.6-sol,anthropic/claude-sonnet-5
-ocx agent fallback set gpt-5.4-mini,xai/grok-4.5 --poll-ms 60000
+ocx agent fallback set gpt-5.6-luna,xai/grok-4.5 --poll-ms 60000
 ocx agent effort set --subagent max
 ```
 

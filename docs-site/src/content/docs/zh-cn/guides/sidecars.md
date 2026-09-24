@@ -69,7 +69,7 @@ OAuth 账户时使用 `anthropic`，否则使用 `openai`。显式选择 `anthro
 如果没有可用 plan，原始图像会被移除，而不会继续转发给纯文本后端。模型目录会为每个由 sidecar 覆盖的模型声明图像输入。
 只有当每个 combo 成员都能原生或通过 sidecar 接受图像、且 combo 的 `imageInput` 设置未禁用时，combo 才会声明图像输入；
 这样 Codex 应用等客户端会允许附件，而不会在 sidecar 运行前阻止它们。当 `visionSidecar.model` 缺失或为空时，OpenAI 执行路径、
-Dashboard 和管理 API 都使用 `gpt-5.4-mini` 作为回退。启动时仍会把明确保存的旧
+Dashboard 和管理 API 都使用 `gpt-5.6-luna` 作为回退。启动时仍会把明确保存的旧
 `gpt-5.4-mini` 值迁移到 `gpt-5.6-luna`；该迁移只作用于已保存值，不适用于缺失的 model 字段。
 
 - 图像可以来自 user、developer 和 tool-result message，也包括 Codex 的 `view_image` 结果。
@@ -113,7 +113,7 @@ Dashboard 和管理 API 都使用 `gpt-5.4-mini` 作为回退。启动时仍会�
   "providers": {
     "ollama-cloud": {
       "baseUrl": "https://ollama.com/v1",
-      "noVisionModels": ["glm-5.2", "gpt-oss", "qwen3-coder", "deepseek-v4-pro"]
+      "noVisionModels": ["glm-5.2", "gpt-oss", "qwen3-coder", "deepseek-v4-flash"]
     }
   }
 }
@@ -127,4 +127,4 @@ Dashboard 和管理 API 都使用 `gpt-5.4-mini` 作为回退。启动时仍会�
 `PUT /api/sidecar-settings` 接受相同字段。部分更新会保留未提交的键。`timeoutMs` 使用运行时整数边界（1–2147483647 毫秒）。
 
 如果更想直接改文件，仍可在 `config.json` 中把 `enabled` 设为 `false`。Anthropic OAuth 搜索和图像描述沿用现有 Claude Code OAuth fingerprint 先例，但仍应使用目标账户和实际负载充分 soak test。所有字段见
-[配置参考](/zh-cn/reference/configuration/#sidecars)。
+[配置参考](/zh-cn/reference/configuration/server/#侧车)。

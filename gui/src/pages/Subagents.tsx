@@ -6,6 +6,8 @@ import SubagentsWorkspace, { FEATURED_MAX } from "../components/subagents-worksp
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
+import SubagentSurfaceWarningModal from "../components/SubagentSurfaceWarningModal";
+import { SUBAGENT_SURFACE_GUIDE_URL } from "../subagent-surface";
 import { useSubagentDelegation, type UltraModePatch, type UltraModeState } from "./use-subagent-delegation";
 
 type CachedSubagents = { available: string[]; chosen: string[]; fallback?: string[]; pollMs?: number; fallbackAvailable?: string[] };
@@ -41,14 +43,28 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   const committed = useRef<CachedSubagents | null>(cached);
   const [status, setStatus] = useState("");
   const [ok, setOk] = useState(false);
-  const [busy, setBusy] = useState(false);
-  /** Sync guard: state-only `busy` can miss clicks before the disabled re-render commits. */
+  /** True for the whole autosave drain, so a roster refresh never lands between two writes. */
   const saveInFlight = useRef(false);
+  /** The newest roster waiting behind the in-flight write; older queued lists are dropped. */
+  const queuedRoster = useRef<string[] | null>(null);
+  /** Mirrors `chosen` synchronously, so two clicks in one render both build on the latest list. */
+  const latestChosen = useRef<string[]>(chosen);
+  const setRoster = useCallback((next: string[]) => {
+    latestChosen.current = next;
+    setChosen(next);
+  }, []);
   const delegation = useSubagentDelegation(apiBase);
   const [ultraState, setUltraState] = useState<{ apiBase: string; mode: UltraModeState } | null>(null);
   const ultraModeCurrent = ultraState?.apiBase === apiBase;
   const ultraMode = ultraModeCurrent ? ultraState.mode : UNLOADED_ULTRA_MODE;
   const [ultraSaving, setUltraSaving] = useState(false);
+  /** A base/v2 selection from this page waiting on the approval dialog. */
+  /**
+   * A base/v2 selection waiting on the approval dialog, tagged with the endpoint it was staged
+   * for. Switching endpoints with the dialog open must not apply one proxy's answer to another,
+   * and tagging beats clearing it from an effect, which would be a cascading render.
+   */
+  const [pendingSurface, setPendingSurface] = useState<{ mode: "default" | "v2"; apiBase: string } | null>(null);
   const [ultraLoadFailed, setUltraLoadFailed] = useState(false);
   const ultraLoadGeneration = useRef(0);
   const currentUltraApiBase = useRef(apiBase);
@@ -206,10 +222,10 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
     };
     if (signal?.aborted) throw signal.reason;
     committed.current = next;
-    if (rosterCurrent) setChosen(next.chosen);
+    if (rosterCurrent) setRoster(next.chosen);
     writeSessionListCache(cacheKey, next);
     return next;
-  }, [apiBase, cacheKey, t]);
+  }, [apiBase, cacheKey, setRoster, t]);
 
   // The shared resource owns mount loading and retries; the session seed keeps this workspace
   // usable while the first live response is in flight.
@@ -224,53 +240,64 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   const snapshot = state.data ?? cached;
   const available = snapshot?.available ?? [];
 
-  const toggle = (m: string) => {
-    if (busy) return;
+  // Every roster edit saves itself. Writes are serialized: while one PUT is in flight only the
+  // newest edit waits, so rapid clicks end on the last list the operator made.
+  const persistRoster = async (models: string[]) => {
+    queuedRoster.current = models;
+    if (saveInFlight.current) return;
+    saveInFlight.current = true;
     setStatus("");
+    let failure: unknown = null;
+    let applied = models;
+    while (queuedRoster.current) {
+      const sending = queuedRoster.current;
+      queuedRoster.current = null;
+      try {
+        const r = await fetch(`${apiBase}/api/subagent-models`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ models: sending }),
+        });
+        const d = await readJsonOrThrow<{ applied?: string[] }>(r, t("sub.saveFailed"));
+        applied = d?.applied ?? sending;
+        // The server holds this list even if a newer edit is queued, so it is the restore point.
+        // A legacy roster-only seed does not prove that an empty fallback was loaded.
+        committed.current = { ...committed.current, available, chosen: applied };
+        writeSessionListCache(cacheKey, committed.current);
+        failure = null;
+      } catch (error) {
+        failure = error;
+      }
+    }
     rosterRevision.current += 1;
-    setChosen(prev => prev.includes(m) ? prev.filter(x => x !== m) : (prev.length >= FEATURED_MAX ? prev : [...prev, m]));
-  };
-  const move = (i: number, dir: -1 | 1) => {
-    if (busy) return;
-    rosterRevision.current += 1;
-    setChosen(prev => {
-      const next = [...prev];
-      const j = i + dir;
-      if (j < 0 || j >= next.length) return prev;
-      [next[i], next[j]] = [next[j], next[i]];
-      return next;
-    });
+    saveInFlight.current = false;
+    if (failure) {
+      setRoster(committed.current?.chosen ?? []);
+      setOk(false);
+      setStatus(failure instanceof Error && failure.message ? failure.message : t("sub.networkError"));
+      return;
+    }
+    setRoster(applied);
+    setOk(true);
+    setStatus(t("sub.saved", { n: applied.length, cmd: "ocx sync" }));
   };
 
-  const save = async () => {
-    if (busy || saveInFlight.current) return;
-    saveInFlight.current = true;
+  const editRoster = (next: string[]) => {
     rosterRevision.current += 1;
-    setBusy(true);
-    setStatus("");
-    try {
-      const r = await fetch(`${apiBase}/api/subagent-models`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ models: chosen }),
-      });
-      const d = await readJsonOrThrow<{ applied?: string[] }>(r, t("sub.saveFailed"));
-      rosterRevision.current += 1;
-      const applied = d?.applied ?? chosen;
-      if (d?.applied) setChosen(d.applied);
-      // A legacy roster-only seed does not prove that an empty fallback was loaded.
-      const next = { ...committed.current, available, chosen: applied };
-      committed.current = next;
-      writeSessionListCache(cacheKey, next);
-      setOk(true);
-      setStatus(t("sub.saved", { n: applied.length, cmd: "ocx sync" }));
-    } catch (error) {
-      setOk(false);
-      setStatus(error instanceof Error && error.message ? error.message : t("sub.networkError"));
-    } finally {
-      saveInFlight.current = false;
-      setBusy(false);
-    }
+    setRoster(next);
+    void persistRoster(next);
+  };
+  const toggle = (m: string) => {
+    const prev = latestChosen.current;
+    if (!prev.includes(m) && prev.length >= FEATURED_MAX) return;
+    editRoster(prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m]);
+  };
+  const move = (i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    const next = [...latestChosen.current];
+    if (j < 0 || j >= next.length) return;
+    [next[i], next[j]] = [next[j]!, next[i]!];
+    editRoster(next);
   };
 
   const saveFallback = async () => {
@@ -340,10 +367,8 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
         available={available}
         fallbackAvailable={fallbackAvailable ?? []}
         chosen={chosen}
-        busy={busy}
         onToggle={toggle}
         onMove={move}
-          onSave={() => { void save(); }}
           fallback={fallback}
           fallbackPollMs={fallbackPollMs}
           fallbackBusy={fallbackBusy || !fallbackLoaded}
@@ -361,11 +386,38 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
           onSave: patch => { void delegation.save(patch); },
           ultraMode,
           ultraSaving: ultraSaving || !ultraModeCurrent,
-          onUltraModeSave: patch => { void saveUltraMode(patch); },
+          // This page carries the same v1/base/v2 switch as Models and the Dashboard, so it
+          // needs the same gate: base and v2 wait for an answer, everything else writes.
+          onUltraModeSave: patch => {
+            if (patch.multiAgentMode === "default" || patch.multiAgentMode === "v2") {
+              setPendingSurface({ mode: patch.multiAgentMode, apiBase });
+              return;
+            }
+            void saveUltraMode(patch);
+          },
           ultraLoadFailed,
           onUltraModeRetry: () => { void retryUltraMode(); },
         }}
       />
+      {pendingSurface && pendingSurface.apiBase === apiBase && (
+        <SubagentSurfaceWarningModal
+          reason="selection"
+          mode={pendingSurface.mode}
+          docsUrl={SUBAGENT_SURFACE_GUIDE_URL}
+          busy={ultraSaving}
+          onContinue={() => {
+            const next = pendingSurface.mode;
+            setPendingSurface(null);
+            // Answer the advisory too: this operator has just read the same warning.
+            void saveUltraMode({ multiAgentMode: next, multiAgentSurfaceAdvisoryAcknowledged: true });
+          }}
+          onChooseV1={() => {
+            setPendingSurface(null);
+            if (ultraMode.multiAgentMode !== "v1") void saveUltraMode({ multiAgentMode: "v1", multiAgentSurfaceAdvisoryAcknowledged: true });
+          }}
+          onDismiss={() => setPendingSurface(null)}
+        />
+      )}
     </>
   );
 }
