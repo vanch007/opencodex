@@ -40,6 +40,17 @@ import type { OcxConfig, OcxProviderConfig } from "../types";
 /** Cap same-request rotations so a short Retry-After cannot spin. Mirrors the Anthropic bound. */
 export const GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST = 3;
 
+/**
+ * Antigravity can carry a larger operator-managed account pool than the generic
+ * OAuth providers. Bound one request to every currently eligible account at
+ * most once; accounts marked for reauthentication or already cooled are not
+ * counted. Other providers retain the guarded default of three rotations.
+ */
+export const genericOAuthFailoverLimit = (providerName: string, now = Date.now()): number =>
+  providerName === "google-antigravity"
+    ? Math.max(0, eligibleAccountCount(providerName, now) - 1)
+    : GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST;
+
 const DEFAULT_COOLDOWN_MS = 60_000;
 const MAX_COOLDOWN_MS = 15 * 60_000;
 

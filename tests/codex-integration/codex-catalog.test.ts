@@ -2243,7 +2243,7 @@ describe("configured CatalogModel displayName -> catalog display_name", () => {
     expect(api?.slug).toBe("commandcode/deepseek-deepseek-v4.1-flash");
   });
 
-  test("Google Antigravity routed models relabel the picker row with compact agy prefix", () => {
+  test("Google Antigravity routed models use compact model-only picker labels", () => {
     const entries = buildCatalogEntries(nativeTemplate(), [], [
       { provider: "google-antigravity", id: "gemini-3.8-flash", owned_by: "google-antigravity" },
       { provider: "google-antigravity", id: "claude-sonnet-4-6", owned_by: "google-antigravity" },
@@ -2252,9 +2252,9 @@ describe("configured CatalogModel displayName -> catalog display_name", () => {
     const claude = entries.find(e => e.slug === "google-antigravity/claude-sonnet-4-6");
 
     // Display-only relabel: routing slugs stay untouched.
-    expect(gemini?.display_name).toBe("agy/gemini-3.8-flash");
+    expect(gemini?.display_name).toBe("gemini-3.8-flash");
     expect(gemini?.slug).toBe("google-antigravity/gemini-3.8-flash");
-    expect(claude?.display_name).toBe("agy/claude-sonnet-4-6");
+    expect(claude?.display_name).toBe("claude-sonnet-4-6");
     expect(claude?.slug).toBe("google-antigravity/claude-sonnet-4-6");
   });
 

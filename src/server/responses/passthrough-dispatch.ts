@@ -134,7 +134,7 @@ import type { OAuthAccessSnapshot } from "../../oauth";
 import { publicOAuthAuthenticationErrorMessage } from "../../oauth";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import {
-  GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
+  genericOAuthFailoverLimit,
   hasEligibleGenericOAuthFailoverTarget,
   isGenericOAuthFailoverEnabled,
   rotateGenericOAuthAccountOn429,
@@ -1263,7 +1263,7 @@ export async function preparePassthroughExchange(
       // have run and would cool down an account that refused nothing.
       && !isNonReplayableResponse(upstreamResponse)
      && transportState.genericFailoverAccountId
-      && transportState.genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
+      && transportState.genericFailovers < genericOAuthFailoverLimit(route.providerName)
       && isGenericOAuthFailoverEnabled(config, route.providerName)
     ) {
       // The roster cap above is one half of the bound; the request's shared budget is the

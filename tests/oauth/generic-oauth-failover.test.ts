@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   clearGenericFailoverHealth,
+  genericOAuthFailoverLimit,
   eligibleFailoverAccounts,
   genericFailoverRetryAfterSeconds,
   hasEligibleGenericOAuthFailoverTarget,
@@ -74,6 +75,22 @@ async function seed(count: number, offset = 0): Promise<string[]> {
 }
 
 describe("#2568 generic OAuth account failover", () => {
+  test("Antigravity retry budget grows with ten eligible accounts and excludes reauth", async () => {
+    expect(genericOAuthFailoverLimit("google-antigravity")).toBe(0);
+    for (let i = 0; i < 10; i++) {
+      await saveCredential("google-antigravity", {
+        access: `synthetic-access-${i}`, refresh: `synthetic-refresh-${i}`,
+        expires: Date.now() + 3_600_000, accountId: `synthetic-${i}`,
+      } as never, { addAccount: true });
+    }
+    clearGenericFailoverHealth();
+    expect(genericOAuthFailoverLimit("google-antigravity")).toBe(9);
+    expect(genericOAuthFailoverLimit("xai")).toBe(3);
+    const ids = getAccountSet("google-antigravity")!.accounts.map(a => a.id);
+    await markAccountNeedsReauth("google-antigravity", ids[9]!, true);
+    clearGenericFailoverHealth();
+    expect(genericOAuthFailoverLimit("google-antigravity")).toBe(8);
+  });
   for (const provider of ["xai", "cursor", "kimi", "github-copilot", "google-antigravity", "nous", "kiro", "meta-muse"]) {
     test(`manual selection owns healthy dispatch for ${provider}, with pool off or on`, async () => {
       for (const accountId of ["selected", "spare"]) {
@@ -341,7 +358,7 @@ describe("sidecar on429 wiring", () => {
     // The gate is a POSITIVE else-if, not an early return: an early bare return here made the
     // Anthropic arm below unreachable, because Anthropic never has a genericFailoverAccountId.
     expect(body).toContain("genericFailoverAccountId");
-    expect(body).toContain("genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST");
+    expect(body).toContain("genericFailovers < genericOAuthFailoverLimit(route.providerName)");
     expect(body).toContain("isGenericOAuthFailoverEnabled(config, route.providerName)");
 
     // Anthropic's pool is excluded from generic failover, so it needs its own arm here or a 429

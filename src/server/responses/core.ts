@@ -9,7 +9,13 @@ import type {
 import { createTranslatorBudget } from "../../lib/translator-budget";
 import { captureExplicitOpenAiCallerAuth } from "../../providers/openai-sidecar";
 import { captureCallerDirectAuth } from "../../providers/caller-authorization";
-import { createRequestExecutionBudget } from "../../lib/request-execution-budget";
+import {
+  CODEX_TEXT_GUARDED_BUDGET_POLICY,
+  createRequestExecutionBudget,
+  deriveRequestExecutionBudget,
+  isRequestExecutionBudget,
+} from "../../lib/request-execution-budget";
+import { genericOAuthFailoverLimit } from "../../oauth/generic-account-failover";
 import { attachRequestSpendTracker } from "./request-spend";
 import { finalizeOwnedTranslatorBudget } from "./core-lifetime";
 import type { TranslatorBudget } from "../../lib/translator-budget";
@@ -101,6 +107,25 @@ async function handleResponsesInner(
   try {
     const requestState = await prepareResponsesRequest(requestContext, admissionState, requestDispatchers);
     if (requestState instanceof Response) return requestState;
+    // Antigravity pools are explicitly operator-managed and may be larger than the
+    // generic three-hop OAuth default. Expand only this concrete route's shared
+    // execution ledger, once, so a 429 can walk each eligible account at most once.
+    // Other providers keep the guarded four-send policy unchanged.
+    if (requestState.route.providerName === "google-antigravity"
+      && isRequestExecutionBudget(requestContext.options.sendBudget)) {
+      const accountSends = genericOAuthFailoverLimit("google-antigravity") + 1;
+      const currentBudget = requestContext.options.sendBudget;
+      if (accountSends > currentBudget.policy.maxTotalModelSends) {
+        requestContext.options.sendBudget = deriveRequestExecutionBudget(currentBudget, {
+          ...CODEX_TEXT_GUARDED_BUDGET_POLICY,
+          maxTotalModelSends: accountSends,
+          baseSendAllowance: accountSends,
+          finalRecoveryAllowance: 0,
+          maxAlternateTargetSends: accountSends - 1,
+          maxTargetTransitions: accountSends - 1,
+        });
+      }
+    }
     const transportState = await prepareResponsesTransport(requestContext, admissionState, requestState);
     if (transportState instanceof Response) return transportState;
     const sidecarState = await prepareResponsesSidecarAuth(requestContext, requestState, transportState);

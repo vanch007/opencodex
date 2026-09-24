@@ -72,13 +72,16 @@ function routedDisplayName(slug: string, model?: CatalogModel, config?: Pick<Ocx
   const provider = slug.slice(0, slash);
   let modelId = slug.slice(slash + 1);
   // Keep the picker compact for the locally configured third-party providers.
-  if (provider === "google-antigravity" || provider === "xai") return modelId;
+  // Preserve an explicit non-default Antigravity alias; only the built-in
+  // compact alias is collapsed to the model name requested by this install.
+  if (provider === "xai") return modelId;
   if (provider === "google-antigravity") {
     if (model?.providerAlias === null) return slug;
     const alias = (typeof model?.providerAlias === "string" && model.providerAlias.trim().length > 0)
       ? model.providerAlias.trim()
       : effectiveProviderAlias(provider, undefined, config);
-    return alias ? `${alias}/${modelId}` : slug;
+    if (!alias || alias === "agy") return modelId;
+    return `${alias}/${modelId}`;
   }
   if (provider === "command-code" || provider === "commandcode") {
     const m = modelId.match(/^([a-z0-9]+)-([a-z0-9]+(?:-[a-z0-9]+)+)$/i);

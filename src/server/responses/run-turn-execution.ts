@@ -22,7 +22,7 @@ import type { AdapterEvent, OcxProviderContinuationState } from "../../types";
 import { adapterFailureFromMessage, SEND_BUDGET_EXHAUSTED_CODE } from "../../lib/errors";
 import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
 import {
-  GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
+  genericOAuthFailoverLimit,
   hasEligibleGenericOAuthFailoverTarget,
   isGenericOAuthFailoverEnabled,
   rotateGenericOAuthAccountOn429,
@@ -241,7 +241,7 @@ export async function executeResponsesRunTurn(
       if (
         status !== 429
         || !transportState.genericFailoverAccountId
-        || transportState.genericFailovers >= GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
+        || transportState.genericFailovers >= genericOAuthFailoverLimit(route.providerName)
         || !isGenericOAuthFailoverEnabled(config, route.providerName)
       ) return false;
       // Intersection with the request's shared budget: the roster bound above answers "may this
