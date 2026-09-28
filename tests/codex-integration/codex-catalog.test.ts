@@ -2258,6 +2258,23 @@ describe("configured CatalogModel displayName -> catalog display_name", () => {
     expect(claude?.slug).toBe("google-antigravity/claude-sonnet-4-6");
   });
 
+  test("Google Antigravity Gemini summaries stay visible after catalog sync", async () => {
+    const provider: OcxProviderConfig = {
+      adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+      authMode: "oauth", googleMode: "cloud-code-assist", liveModels: false,
+      models: ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.1-pro"],
+      modelSupportsReasoningSummaries: { "gemini-3.7-flash": false },
+    };
+    const models = await gatherRoutedModels({ providers: { "google-antigravity": provider } });
+    const entries = buildCatalogEntries(nativeTemplate(), [], models);
+    const summarySupport = (id: string) => entries.find(entry =>
+      entry.slug === `google-antigravity/${id}`)?.supports_reasoning_summaries;
+
+    expect(summarySupport("gemini-3.8-flash")).toBe(true);
+    expect(summarySupport("gemini-3.7-flash")).toBe(false); // Explicit user opt-out wins.
+    expect(summarySupport("gemini-3.1-pro")).toBe(true);
+  });
+
   test("Google Antigravity respects custom providerAlias on catalog display", () => {
     const entries = buildCatalogEntries(nativeTemplate(), [], [
       { provider: "google-antigravity", id: "gemini-3.8-flash", providerAlias: "antigrav", owned_by: "google-antigravity" },
