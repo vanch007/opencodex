@@ -43,6 +43,8 @@ import {
   hasEligibleGenericOAuthFailoverTarget,
   isGenericOAuthFailoverEnabled,
   rotateGenericOAuthAccountOn429,
+  isAntigravityAccountVerificationError,
+  rotateAntigravityAccountOnVerificationRequired,
   failoverAccountSnapshot,
 } from "../../oauth/generic-account-failover";
 import { shouldAttemptImageTierRetry } from "../image-retry";
@@ -403,12 +405,21 @@ export function createAdapterContinuations(
       // two sidecars already produced once. Request-local state is shared with the other arms so
       // the per-request bound cannot be silently re-armed by reaching a different loop.
      if (
-       response.status === 429
+       (response.status === 429 || (response.status === 403
+         && route.providerName === "google-antigravity"
+         && isAntigravityAccountVerificationError(403, await response.clone().text())))
        && transportState.genericFailoverAccountId
         && !isNonReplayableResponse(response)
-       && transportState.genericFailovers < genericOAuthFailoverLimit(route.providerName)
-        && isGenericOAuthFailoverEnabled(config, route.providerName)
+       && (response.status === 403 || transportState.genericFailovers < genericOAuthFailoverLimit(route.providerName))
+        && (response.status === 403 || isGenericOAuthFailoverEnabled(config, route.providerName))
       ) {
+        const verificationRequired = response.status === 403;
+        const verificationNextAccountId = verificationRequired && transportState.replayOAuthCredentialSnapshot?.accountId
+          === transportState.genericFailoverAccountId
+          ? await rotateAntigravityAccountOnVerificationRequired(
+            config, transportState.genericFailoverAccountId,
+            transportState.replayOAuthCredentialSnapshot.generation, Date.now(), route.modelId,
+          ) : null;
         // Intersection with the shared request budget. The continuation loop re-sends the
         // turn, so without this the per-request bound could be re-armed simply by reaching a
         // different loop -- which is the divergence the comment above already warns about.
@@ -419,22 +430,22 @@ export function createAdapterContinuations(
         const adapterOwnsDispatch = transportState.activeAdapter.fetchResponse !== undefined;
         const hop = reserveCredentialHop(
           "auth-recovery",
-          `${route.providerName}|${route.modelId}|continuation-oauth-429`,
+          `${route.providerName}|${route.modelId}|continuation-oauth-${verificationRequired ? "verification" : "429"}`,
           !adapterOwnsDispatch && transientRetryPolicyFor(route.provider) !== null,
         );
         const nextAccountId = hop.allowed
-          ? rotateGenericOAuthAccountOn429(
+          ? verificationNextAccountId ?? (!verificationRequired ? rotateGenericOAuthAccountOn429(
             config,
             route.providerName,
             transportState.genericFailoverAccountId,
             response.headers.get("retry-after"),
             Date.now(),
             route.modelId,
-          )
+          ) : null)
           : null;
         // A roster quorum ignores cooldowns, so only attribute a budget refusal when the
         // non-mutating selector confirms that an alternate account could serve this model now.
-        if (!hop.allowed && hasEligibleGenericOAuthFailoverTarget(
+        if (!hop.allowed && !verificationRequired && hasEligibleGenericOAuthFailoverTarget(
           route.providerName, transportState.genericFailoverAccountId, Date.now(), route.modelId,
         )) noteAttemptRecoveryWithheld(logCtx.activeAttempt, "rotation-send-budget");
         if (!nextAccountId) hop.permit?.release();
@@ -478,7 +489,7 @@ export function createAdapterContinuations(
               // take a second one for the same replay. A helper-routed replay needs no handoff:
               // its reporter settles the booking made above.
               if (adapterOwnsDispatch) sendBudgetState.pendingHopPermit = hop.permit;
-              nextContinuationRecoveryKind = "oauth-account-429";
+              nextContinuationRecoveryKind = verificationRequired ? "oauth-account-verification" : "oauth-account-429";
               continue;
             }
           } catch {

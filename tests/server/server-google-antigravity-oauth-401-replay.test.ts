@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { forceRefreshOAuthAccessSnapshot, getValidAccessTokenSnapshot } from "../../src/oauth";
-import { getAccountSet, saveCredential } from "../../src/oauth/store";
+import { getAccountSet, saveCredential, setActiveAccount } from "../../src/oauth/store";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -144,6 +144,7 @@ function installOAuthFetch(
     tokenErrorDescription?: string;
     refreshedProjectId?: string | null;
     beforeFirstUnauthorized?: () => Promise<void>;
+    verificationRequired?: boolean;
   } = {},
 ): { chatAuth: string[]; chatProjects: string[]; requestPaths: string[]; counts: { refresh: number } } {
   const chatAuth: string[] = [];
@@ -205,7 +206,9 @@ function installOAuthFetch(
         return new Response(JSON.stringify({
           error: {
             code: status,
-            message: "Request had invalid authentication credentials.",
+            message: status === 403 && options.verificationRequired
+              ? "Verify your account to continue."
+              : "Request had invalid authentication credentials.",
             status: status === 401 ? "UNAUTHENTICATED" : "PERMISSION_DENIED",
           },
         }), {
@@ -247,7 +250,9 @@ function installOAuthFetch(
         return new Response(JSON.stringify({
           error: {
             code: status,
-            message: "Request had invalid authentication credentials.",
+            message: status === 403 && options.verificationRequired
+              ? "Verify your account to continue."
+              : "Request had invalid authentication credentials.",
             status: status === 401 ? "UNAUTHENTICATED" : "PERMISSION_DENIED",
           },
         }), {
@@ -304,6 +309,97 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
       await response.text();
       expect(observed.counts.refresh).toBe(0);
       expect(observed.chatAuth).toEqual(["Bearer rejected-access"]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test.each([false, true])("verification-required 403 retires only the rejected account and retries (native=%s)", async native => {
+    await seedOAuth();
+    const accountA = getAccountSet("google-antigravity")!.activeAccountId;
+    await saveCredential("google-antigravity", {
+      access: "working-access", refresh: "working-refresh", expires: Date.now() + 3_600_000,
+      accountId: "antigravity-working-account", projectId: "working-project-id", source: "oauth",
+    });
+    await setActiveAccount("google-antigravity", accountA);
+    saveConfig(native ? antigravityPassthroughConfig() : antigravityConfig());
+    const observed = installOAuthFetch([403, 200], { verificationRequired: true });
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("ok after");
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer working-access"]);
+      expect(observed.counts.refresh).toBe(0);
+      expect(getAccountSet("google-antigravity")!.accounts.find(a => a.id === accountA)?.needsReauth).toBe(true);
+      expect(getAccountSet("google-antigravity")!.activeAccountId).not.toBe(accountA);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test.each([false, true])("consecutive verification challenges walk the pool once (native=%s)", async native => {
+    await seedOAuth();
+    const firstId = getAccountSet("google-antigravity")!.activeAccountId;
+    await saveCredential("google-antigravity", {
+      access: "second-access", refresh: "second-refresh", expires: Date.now() + 3_600_000,
+      accountId: "antigravity-second-account", projectId: "second-project-id", source: "oauth",
+    });
+    await saveCredential("google-antigravity", {
+      access: "third-access", refresh: "third-refresh", expires: Date.now() + 3_600_000,
+      accountId: "antigravity-third-account", projectId: "third-project-id", source: "oauth",
+    });
+    await setActiveAccount("google-antigravity", firstId);
+    saveConfig(native ? antigravityPassthroughConfig() : antigravityConfig());
+    const observed = installOAuthFetch([403, 403, 200], { verificationRequired: true });
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(observed.chatAuth).toEqual([
+        "Bearer rejected-access", "Bearer second-access", "Bearer third-access",
+      ]);
+      expect(getAccountSet("google-antigravity")!.accounts.filter(a => a.needsReauth)).toHaveLength(2);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test.each([false, true])("verification-required 403 flags the only account without replay (native=%s)", async native => {
+    await seedOAuth();
+    const accountId = getAccountSet("google-antigravity")!.activeAccountId;
+    saveConfig(native ? antigravityPassthroughConfig() : antigravityConfig());
+    const observed = installOAuthFetch([403], { verificationRequired: true });
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(403);
+      await response.text();
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access"]);
+      expect(getAccountSet("google-antigravity")!.accounts.find(a => a.id === accountId)?.needsReauth).toBe(true);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test.each([false, true])("unrelated PERMISSION_DENIED does not switch accounts (native=%s)", async native => {
+    await seedOAuth();
+    const accountA = getAccountSet("google-antigravity")!.activeAccountId;
+    await saveCredential("google-antigravity", {
+      access: "working-access", refresh: "working-refresh", expires: Date.now() + 3_600_000,
+      accountId: "antigravity-working-account", projectId: "working-project-id", source: "oauth",
+    });
+    await setActiveAccount("google-antigravity", accountA);
+    saveConfig(native ? antigravityPassthroughConfig() : antigravityConfig());
+    const observed = installOAuthFetch([403]);
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(403);
+      await response.text();
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access"]);
+      expect(getAccountSet("google-antigravity")!.accounts.find(a => a.id === accountA)?.needsReauth).not.toBe(true);
     } finally {
       await server.stop(true);
     }

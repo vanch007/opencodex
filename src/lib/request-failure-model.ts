@@ -222,6 +222,7 @@ const RECOVERY_KIND_CAUSE = {
   "rate-limit-429": "rate-limit",
   "anthropic-oauth-429": "rate-limit",
   "oauth-account-429": "rate-limit",
+  "oauth-account-verification": "credential-rejected",
   "image-413": "payload-too-large",
   // The gateway rejects a body it accepts seconds later and the replay is byte-identical, so
   // nothing about the payload was wrong; the origin declined to take it at that moment.

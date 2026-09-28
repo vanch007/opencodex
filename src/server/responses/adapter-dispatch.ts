@@ -55,6 +55,8 @@ import {
   genericOAuthFailoverLimit,
   isGenericOAuthFailoverEnabled,
   rotateGenericOAuthAccountOn429,
+  isAntigravityAccountVerificationError,
+  rotateAntigravityAccountOnVerificationRequired,
   failoverAccountSnapshot,
 } from "../../oauth/generic-account-failover";
 import {
@@ -848,11 +850,22 @@ export async function prepareAdapterExchange(
       // Anthropic are excluded by isGenericFailoverProvider: their pools own quota scopes,
       // probe leases and affinity that this must not reimplement.
       while (
-        upstreamResponse.status === 429
+        (upstreamResponse.status === 429 || (upstreamResponse.status === 403 && route.providerName === "google-antigravity"
+          && isAntigravityAccountVerificationError(upstreamResponse.status, await upstreamResponse.clone().text())))
         && transportState.genericFailoverAccountId
-        && transportState.genericFailovers < genericOAuthFailoverLimit(route.providerName)
-        && isGenericOAuthFailoverEnabled(config, route.providerName)
+        && (upstreamResponse.status === 403 || transportState.genericFailovers < genericOAuthFailoverLimit(route.providerName))
+        && (upstreamResponse.status === 403 || isGenericOAuthFailoverEnabled(config, route.providerName))
       ) {
+        const verificationRequired = upstreamResponse.status === 403;
+        const verificationNextAccountId = verificationRequired && transportState.replayOAuthCredentialSnapshot?.accountId
+          === transportState.genericFailoverAccountId
+          ? await rotateAntigravityAccountOnVerificationRequired(
+            config, transportState.genericFailoverAccountId,
+            transportState.replayOAuthCredentialSnapshot.generation, Date.now(), route.modelId,
+          ) : null;
+        // Even when no alternate or send budget remains, the rejected generation is now
+        // excluded from future requests. A refreshed generation is never marked.
+        if (verificationRequired && !verificationNextAccountId) break;
         // Intersection with the shared request budget. This arm re-sends through
         // rebuildAndRefetch, so the roster cap alone would let one request walk the roster on
         // an allowance the rest of the request cannot see. A refusal ends the ladder with the
@@ -869,14 +882,14 @@ export async function prepareAdapterExchange(
         const adapterOwnsDispatch = transportState.activeAdapter.fetchResponse !== undefined;
         const hop = reserveCredentialHop(
           "auth-recovery",
-          `${route.providerName}|${route.modelId}|adapter-recovery-oauth-429`,
+          `${route.providerName}|${route.modelId}|adapter-recovery-oauth-${verificationRequired ? "verification" : "429"}`,
           // Only a helper-routed replay reports this send back. A reset-only refetch reports
           // nothing and an adapter ladder settles the booking itself, so promising an external
           // report on either would leave a booking pending until it swallowed a later charge.
           !adapterOwnsDispatch && transientRetryPolicyFor(route.provider) !== null,
         );
         if (!hop.allowed) break;
-        const nextAccountId = rotateGenericOAuthAccountOn429(
+        const nextAccountId = verificationNextAccountId ?? rotateGenericOAuthAccountOn429(
           config,
           route.providerName,
           transportState.genericFailoverAccountId,
@@ -918,7 +931,7 @@ export async function prepareAdapterExchange(
             // adapter-owned ladder is the exception -- its own reservation is the confirmation,
             // and settling here first would hand it a dead permit, which it reads as an
             // exhausted request and stops sending on.
-            result = await rebuildAndRefetch("oauth-account-429", () => {
+            result = await rebuildAndRefetch(verificationRequired ? "oauth-account-verification" : "oauth-account-429", () => {
               if (!adapterOwnsDispatch) hop.permit?.use();
             });
           } finally {

@@ -138,6 +138,8 @@ import {
   hasEligibleGenericOAuthFailoverTarget,
   isGenericOAuthFailoverEnabled,
   rotateGenericOAuthAccountOn429,
+  isAntigravityAccountVerificationError,
+  rotateAntigravityAccountOnVerificationRequired,
   failoverAccountSnapshot,
 } from "../../oauth/generic-account-failover";
 import { captureCodexAffinityDiagnostic } from "../../codex/affinity-debug";
@@ -1257,25 +1259,38 @@ export async function preparePassthroughExchange(
     // Native Responses returns before the generic adapter's OAuth rotation loop. Keep
     // the same quorum, cooldown and request budget here, before any client bytes flow.
    if (
-     upstreamResponse.status === 429
+     (upstreamResponse.status === 429 || (upstreamResponse.status === 403
+       && route.providerName === "google-antigravity"
+       && isAntigravityAccountVerificationError(403, await upstreamResponse.clone().text())))
       // Not a provider rate limit when this proxy synthesized it for a refused reset
       // replay; rotating accounts on it would re-send an inference that may already
       // have run and would cool down an account that refused nothing.
       && !isNonReplayableResponse(upstreamResponse)
      && transportState.genericFailoverAccountId
-      && transportState.genericFailovers < genericOAuthFailoverLimit(route.providerName)
-      && isGenericOAuthFailoverEnabled(config, route.providerName)
+     && (upstreamResponse.status === 403 || transportState.genericFailovers < genericOAuthFailoverLimit(route.providerName))
+      && (upstreamResponse.status === 403 || isGenericOAuthFailoverEnabled(config, route.providerName))
     ) {
+      const verificationRequired = upstreamResponse.status === 403;
+      const verificationNextAccountId = verificationRequired && transportState.replayOAuthCredentialSnapshot?.accountId
+        === transportState.genericFailoverAccountId
+        ? await rotateAntigravityAccountOnVerificationRequired(
+          config, transportState.genericFailoverAccountId,
+          transportState.replayOAuthCredentialSnapshot.generation, Date.now(), route.modelId,
+        ) : null;
+      if (verificationRequired && !verificationNextAccountId) {
+        // Keep the provider's original denial; the account has still been retired.
+        break passthroughRecovery;
+      }
       // The roster cap above is one half of the bound; the request's shared budget is the
       // other. A refused hop leaves the real 429 -- body, Retry-After and any quota evidence
       // -- exactly as upstream sent it.
       const hop = reserveCredentialHop(
         "auth-recovery",
-        `${route.providerName}|${route.modelId}|oauth-account-429`,
+        `${route.providerName}|${route.modelId}|oauth-account-${verificationRequired ? "verification" : "429"}`,
         true,
       );
-      if (hop.allowed) {
-        const nextAccountId = rotateGenericOAuthAccountOn429(
+      if (hop.allowed && (!verificationRequired || verificationNextAccountId)) {
+        const nextAccountId = verificationNextAccountId ?? rotateGenericOAuthAccountOn429(
           config, route.providerName, transportState.genericFailoverAccountId,
           upstreamResponse.headers.get("retry-after"),
           Date.now(),
@@ -1299,7 +1314,7 @@ export async function preparePassthroughExchange(
           // The replay IS this hop's send, so the rebuild spends the reservation instead of
           // asking for one of its own.
           sendBudgetState.pendingHopPermit = hop.permit;
-          const result = await rebuildAndRefetch("oauth-account-429");
+          const result = await rebuildAndRefetch(verificationRequired ? "oauth-account-verification" : "oauth-account-429");
           sendBudgetState.pendingHopPermit = undefined;
           if ("failed" in result) return result.failed;
           upstreamResponse = result;
@@ -1310,7 +1325,7 @@ export async function preparePassthroughExchange(
       } else {
         // The activation quorum ignores cooldowns; prove that the selector has a live alternate
         // before describing this as a recovery that only the shared request budget withheld.
-        if (hasEligibleGenericOAuthFailoverTarget(
+        if (!verificationRequired && hasEligibleGenericOAuthFailoverTarget(
           route.providerName, transportState.genericFailoverAccountId, Date.now(), route.modelId,
         )) noteAttemptRecoveryWithheld(logCtx.activeAttempt, "rotation-send-budget");
       }

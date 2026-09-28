@@ -14,7 +14,7 @@
  * (`oauth/anthropic-routing.ts` owns affinity and a fail-closed local-cli credential rule).
  * Both are excluded by `isGenericFailoverProvider`.
  */
-import { getAccountSet } from "./store";
+import { getAccountSet, markAccountNeedsReauthIfGeneration } from "./store";
 import { getValidAccessSnapshotForAccount, type OAuthAccessSnapshot } from "./index";
 import {
   accountHeadroomPercent,
@@ -373,6 +373,47 @@ export function rotateGenericOAuthAccountOn429(
   });
   sweepExpiredOnWrite(now);
 
+  return pickGenericOAuthFailoverAccount(config, providerName, failedAccountId, now, requestedModelId, family);
+}
+
+/** Only this explicit Google verification challenge is safe to treat as an account-local denial. */
+export function isAntigravityAccountVerificationError(status: number, detail: string): boolean {
+  return status === 403
+    && /PERMISSION_DENIED/i.test(detail)
+    && /verify your account to continue\.?/i.test(detail);
+}
+
+/** Retire the rejected credential generation, then retry with a different eligible account. */
+export async function rotateAntigravityAccountOnVerificationRequired(
+  config: OcxConfig,
+  failedAccountId: string,
+  failedGeneration: string,
+  now = Date.now(),
+  requestedModelId?: string | null,
+): Promise<string | null> {
+  const providerName = "google-antigravity";
+  const set = getAccountSet(providerName);
+  if (!set?.accounts.some(account => account.id === failedAccountId)) return null;
+  // A concurrent re-login may have replaced the rejected credential. Never retire that new one.
+  if (!await markAccountNeedsReauthIfGeneration(providerName, failedAccountId, failedGeneration)) return null;
+  presence.delete(providerName);
+  if (set.accounts.length < 2) return null;
+  return pickGenericOAuthFailoverAccount(
+    config, providerName, failedAccountId, now, requestedModelId,
+    classifyModelFamilyForQuota(providerName, requestedModelId),
+  );
+}
+
+function pickGenericOAuthFailoverAccount(
+  config: OcxConfig,
+  providerName: string,
+  failedAccountId: string,
+  now: number,
+  requestedModelId: string | null | undefined,
+  family: QuotaModelFamily | undefined,
+): string | null {
+  const set = getAccountSet(providerName);
+  if (!set) return null;
   const eligible = eligibleFailoverAccounts(providerName, now, family).filter(id => id !== failedAccountId);
   if (eligible.length === 0) return null;
   // A rotation means the roster in use just changed; do not answer the next activation question
