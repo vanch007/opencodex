@@ -1,8 +1,8 @@
 import { test, expect } from "bun:test";
-import { createGoogleAdapter } from "/Users/vanch/Documents/Codex/2026-08-05/https-github-com-lidge-jun-opencodex/outputs/upgrade-2.51.0/merged/src/adapters/google";
-import { createTranslatorBudget } from "/Users/vanch/Documents/Codex/2026-08-05/https-github-com-lidge-jun-opencodex/outputs/upgrade-2.51.0/merged/src/lib/translator-budget";
-import { bridgeToResponsesSSE, buildResponseJSON } from "/Users/vanch/Documents/Codex/2026-08-05/https-github-com-lidge-jun-opencodex/outputs/upgrade-2.51.0/merged/src/bridge";
-import { httpStatusFromTerminalError } from "/Users/vanch/Documents/Codex/2026-08-05/https-github-com-lidge-jun-opencodex/outputs/upgrade-2.51.0/merged/src/lib/errors";
+import { createGoogleAdapter } from "../src/adapters/google";
+import { createTranslatorBudget } from "../src/lib/translator-budget";
+import { bridgeToResponsesSSE, buildResponseJSON } from "../src/bridge";
+import { httpStatusFromTerminalError } from "../src/lib/errors";
 
 const provider = { name: "google-antigravity", adapter: "google", baseUrl: "http://invalid.local", googleMode: "cloud-code-assist", models: [] } as const;
 const usage = { promptTokenCount: 123, candidatesTokenCount: 2, thoughtsTokenCount: 4 };

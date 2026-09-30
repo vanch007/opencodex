@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { AntigravityBalancer, antigravityBalanceUsage, antigravityQuotaFamily } from "/Users/vanch/Documents/Codex/2026-08-05/https-github-com-lidge-jun-opencodex/outputs/upgrade-2.51.0/merged/src/oauth/antigravity-balance";
+import { AntigravityBalancer, antigravityBalanceUsage, antigravityQuotaFamily } from "../src/oauth/antigravity-balance";
 
 describe("Antigravity quota balancing", () => {
   test("uses requested family instead of unrelated quota", () => {

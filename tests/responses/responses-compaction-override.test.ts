@@ -313,6 +313,32 @@ describe("manual compaction reuses existing handlers", () => {
     expect(calls[0]!.body.reasoning).toBeUndefined();
   });
 
+  test("native compact drops unbacked reasoning ids but keeps ciphertext-backed ids", async () => {
+    const settings = config();
+    settings.providers["openai-apikey"] = {
+      adapter: "openai-responses", authMode: "key", baseUrl: "https://api.openai.com/v1", apiKey: "fixture-key",
+    };
+    settings.compactionRouting = { model: "openai-apikey/gpt-5.6-luna" };
+    let sent: Record<string, any> | undefined;
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      sent = JSON.parse(String(init?.body));
+      if (sent!.input.some((item: Record<string, unknown>) => item.id === "rs_unbacked")) {
+        return Response.json({ error: { message: "Item with id 'rs_unbacked' not found." } }, { status: 404 });
+      }
+      return Response.json({ output: [{ type: "compaction", encrypted_content: "native-summary" }] });
+    }) as typeof fetch;
+    const input = { ...body(false), model: "openai-apikey/gpt-6-astra", store: false };
+    input.input.unshift(
+      { type: "reasoning", id: "rs_unbacked", summary: [{ type: "summary_text", text: "Previous model summary." }], encrypted_content: null },
+      { type: "reasoning", id: "rs_backed", summary: [], encrypted_content: "native-ciphertext" },
+    );
+    const response = await handleResponsesCompact(request(input, "manual", "responses/compact"), settings, { model: "", provider: "" });
+    expect(response.status).toBe(200);
+    expect(sent!.input[0]).toEqual({ type: "reasoning", summary: [{ type: "summary_text", text: "Previous model summary." }], encrypted_content: null });
+    expect(sent!.input[1].id).toBe("rs_backed");
+    expect(sent!.store).toBe(false);
+  });
+
   test.each(["v1", "v2"])("%s cross-provider override produces a summary the conversation model can replay", async version => {
     const settings = config();
     settings.providers["openai-apikey"] = {

@@ -1,4 +1,4 @@
-import { usageSummary30dResourceKey } from "../usage-summary-resource";
+import { readUsageResponseJson, usageSummary30dResourceKey } from "../usage-summary-resource";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createBoundedFetch } from "../bounded-fetch";
 import { startVisibilityPoll } from "../visibility-poll";
@@ -31,6 +31,15 @@ export interface MainAccountHardLockStatus {
   resetAt?: number;
 }
 
+export interface CodexCredits {
+  hasCredits?: boolean;
+  unlimited?: boolean;
+  overageLimitReached?: boolean;
+  balance?: string;
+  approxLocalMessages?: [number, number];
+  approxCloudMessages?: [number, number];
+}
+
 export interface CodexAccountEntry {
   id: string;
   email: string;
@@ -48,6 +57,8 @@ export interface CodexAccountEntry {
   autoSwitchThresholdOverride: number | null;
   hasCredential: boolean;
   quota: AccountQuota | null;
+  /** Display-only observation; never used for account selection. */
+  credits?: CodexCredits;
   quotaAutoRefresh: {
     fiveHourAvailable: boolean;
     weeklyAvailable: boolean;
@@ -169,8 +180,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     [apiBase],
     async (signal) => {
       const response = await fetch(`${apiBase}/api/usage?range=30d&surface=codex`, { signal });
-      if (!response.ok) throw new Error("account usage load failed");
-      return response.json() as Promise<CodexAccountUsageSummary>;
+      return readUsageResponseJson<CodexAccountUsageSummary>(response, "account usage load failed");
     },
     { enabled },
   );

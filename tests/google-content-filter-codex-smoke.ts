@@ -1,6 +1,6 @@
-import { createGoogleAdapter } from "/Users/vanch/Documents/Codex/2026-08-05/https-github-com-lidge-jun-opencodex/outputs/upgrade-2.51.0/merged/src/adapters/google";
-import { createTranslatorBudget } from "/Users/vanch/Documents/Codex/2026-08-05/https-github-com-lidge-jun-opencodex/outputs/upgrade-2.51.0/merged/src/lib/translator-budget";
-import { bridgeToResponsesSSE } from "/Users/vanch/Documents/Codex/2026-08-05/https-github-com-lidge-jun-opencodex/outputs/upgrade-2.51.0/merged/src/bridge";
+import { createGoogleAdapter } from "../src/adapters/google";
+import { createTranslatorBudget } from "../src/lib/translator-budget";
+import { bridgeToResponsesSSE } from "../src/bridge";
 import { strict as assert } from "node:assert";
 
 // Local-only protocol test: no real provider call, conversation replay, or persisted task.

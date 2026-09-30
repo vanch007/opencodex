@@ -9,15 +9,8 @@ import type {
 import { createTranslatorBudget } from "../../lib/translator-budget";
 import { captureExplicitOpenAiCallerAuth } from "../../providers/openai-sidecar";
 import { captureCallerDirectAuth } from "../../providers/caller-authorization";
-import {
-  CODEX_TEXT_GUARDED_BUDGET_POLICY,
-  createRequestExecutionBudget,
-  deriveRequestExecutionBudget,
-  isRequestExecutionBudget,
-} from "../../lib/request-execution-budget";
-import { genericOAuthFailoverLimit } from "../../oauth/generic-account-failover";
-import { attachRequestSpendTracker } from "./request-spend";
-import { finalizeOwnedTranslatorBudget } from "./core-lifetime";
+import { createInferenceSendBudget } from "../inference/context";
+import { finalizeOwnedTranslatorBudget, finalizeAccountLease } from "./core-lifetime";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { executeComboResponses } from "./core-combo";
 import { prepareResponsesRequest } from "./request-prepare";
@@ -34,9 +27,9 @@ import { createAdapterContinuations } from "./adapter-continuation";
 import { deliverAdapterResponse } from "./adapter-delivery";
 import { releaseUpstreamHostAdmission } from "../../codex/upstream-host-health";
 import { releaseCodexAuthContextProbeLease } from "../../codex/auth-context";
+import { runWithCompactionRecovery } from "./compaction-recovery";
 
 /** Public Responses entry and compatibility exports. Implementations live with their owners. */
-
 
 /**
  * Route one `/v1/responses` request through the adapter pipeline: recovery loop, passthrough
@@ -50,8 +43,12 @@ export async function handleResponses(
 ): Promise<Response> {
   const ownsBudget = options.translatorBudget === undefined;
   const translatorBudget = options.translatorBudget ?? createTranslatorBudget();
+  const accountLoad = { lease: null as import("../../oauth/kiro-account-load").AccountLease | null };
+  const abortSignal = options.abortSignal ?? req.signal;
+  const release = () => { accountLoad.lease?.release(); accountLoad.lease = null; abortSignal.removeEventListener("abort", release); };
+  abortSignal.addEventListener("abort", release, { once: true });
   try {
-    const response = await handleResponsesInner(req, config, logCtx, {
+    const response = await runWithCompactionRecovery(req, config, logCtx, {
       ...options,
       openAiSidecarAuth: options.openAiSidecarAuth === undefined
         ? captureExplicitOpenAiCallerAuth(req.headers, config) : options.openAiSidecarAuth,
@@ -63,11 +60,15 @@ export async function handleResponses(
       visionDescribeTerminal: options.visionDescribeTerminal === true
         || req.headers.get("x-opencodex-vision-describe") === "1",
       translatorBudget,
+      accountLoad,
       // Once at ingress, spend observer included: a combo child inherits the parent's holder.
-      sendBudget: options.sendBudget ?? createRequestExecutionBudget(undefined, undefined, attachRequestSpendTracker(req, logCtx)),
-    });
-    return ownsBudget ? finalizeOwnedTranslatorBudget(response, translatorBudget) : response;
+      sendBudget: options.sendBudget ?? createInferenceSendBudget(req, logCtx),
+    }, handleResponsesInner);
+    const finalResponse = ownsBudget ? finalizeOwnedTranslatorBudget(response, translatorBudget) : response;
+    if (!accountLoad.lease) { release(); return finalResponse; }
+    return finalizeAccountLease(finalResponse, release);
   } catch (error) {
+    release();
     if (ownsBudget) translatorBudget.dispose();
     throw error;
   }
@@ -107,27 +108,9 @@ async function handleResponsesInner(
   try {
     const requestState = await prepareResponsesRequest(requestContext, admissionState, requestDispatchers);
     if (requestState instanceof Response) return requestState;
-    // Antigravity pools are explicitly operator-managed and may be larger than the
-    // generic three-hop OAuth default. Expand only this concrete route's shared
-    // execution ledger, once, so a 429 can walk each eligible account at most once.
-    // Other providers keep the guarded four-send policy unchanged.
-    if (requestState.route.providerName === "google-antigravity"
-      && isRequestExecutionBudget(requestContext.options.sendBudget)) {
-      const accountSends = genericOAuthFailoverLimit("google-antigravity") + 1;
-      const currentBudget = requestContext.options.sendBudget;
-      if (accountSends > currentBudget.policy.maxTotalModelSends) {
-        requestContext.options.sendBudget = deriveRequestExecutionBudget(currentBudget, {
-          ...CODEX_TEXT_GUARDED_BUDGET_POLICY,
-          maxTotalModelSends: accountSends,
-          baseSendAllowance: accountSends,
-          finalRecoveryAllowance: 0,
-          maxAlternateTargetSends: accountSends - 1,
-          maxTargetTransitions: accountSends - 1,
-        });
-      }
-    }
     const transportState = await prepareResponsesTransport(requestContext, admissionState, requestState);
     if (transportState instanceof Response) return transportState;
+    options.onCompactionRecoveryRoute?.(requestState.route);
     const sidecarState = await prepareResponsesSidecarAuth(requestContext, requestState, transportState);
     if (sidecarState instanceof Response) return sidecarState;
     const responseEffects = createResponsesEffects(
@@ -207,29 +190,19 @@ async function handleResponsesInner(
 const requestDispatchers: ResponsesDispatchers = { handleResponses, handleComboResponses };
 
 export { adapterNeedsForcedContinuation } from "./core-replay";
-export { sidecarOutcomeRecorder } from "./core-codex-account";
-export { codexLogAccountId } from "./core-codex-account";
+export {
+  sidecarOutcomeRecorder, codexLogAccountId, usesCodexForwardPoolAuth, preAuthUpstreamHostCircuitKey,
+  upstreamHostCircuitOpenResponse, shouldRetryCodexPoolAccountQuota, shouldRetryCodexScopedQuotaOnAlternate,
+  shouldRetryCodexPoolAccountTransient, codexAccountGatedCanonicalWireModel, codexForwardTerminalOutcomeRecorder,
+} from "./core-codex-account";
 export { shouldAttemptOpaqueBlobRecovery } from "./core-opaque-recovery";
-export { readDisplaySafeErrorText } from "./core-errors";
-export { usesCodexForwardPoolAuth } from "./core-codex-account";
-export { preAuthUpstreamHostCircuitKey } from "./core-codex-account";
-export { upstreamHostCircuitOpenResponse } from "./core-codex-account";
-export { shouldRetryCodexPoolAccountQuota, shouldRetryCodexScopedQuotaOnAlternate } from "./core-codex-account";
-export { shouldRetryCodexPoolAccountTransient } from "./core-codex-account";
-export { codexAccountGatedCanonicalWireModel } from "./core-codex-account";
-export { codexForwardTerminalOutcomeRecorder } from "./core-codex-account";
-export { decodeRequestErrorResponse } from "./core-errors";
-export { comboUnavailableResponse } from "./core-errors";
-export type { ConsumedComboFailure } from "./core-options";
-export type { HandleResponsesOptions } from "./core-options";
-export { clientCancelledResponse } from "./core-errors";
-export { sanitizedRetryAfter } from "./core-combo-failure";
-export { consumeComboFailure } from "./core-combo-failure";
-export { usageFromComboFailureText } from "./core-combo-failure";
-export { createChildPassthroughCallbackGate } from "./core-combo-failure";
-export { buildComboChildHeaders } from "./core-combo-failure";
-export { UPSTREAM_JSON_BODY_READ_OPTIONS } from "./core-lifetime";
+export { readDisplaySafeErrorText, decodeRequestErrorResponse, comboUnavailableResponse, clientCancelledResponse } from "./core-errors";
+export type { ConsumedComboFailure, HandleResponsesOptions } from "./core-options";
+export {
+  sanitizedRetryAfter, consumeComboFailure, usageFromComboFailureText, createChildPassthroughCallbackGate,
+  buildComboChildHeaders,
+} from "./core-combo-failure";
+export { UPSTREAM_JSON_BODY_READ_OPTIONS, linkAbortSignal } from "./core-lifetime";
 export { poolCredentialRefreshIncompleteResponse } from "./core-auth";
 export { applyServiceTierGate } from "./core-normalize";
-export { linkAbortSignal } from "./core-lifetime";
 export { DEFAULT_SHADOW_SOURCE_MODELS, isShadowSourceModel, shadowSourceModels } from "../../lib/shadow-call";

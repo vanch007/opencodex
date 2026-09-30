@@ -196,7 +196,7 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-WSL에서는 `CODEX_HOME`이 비어 있고 Linux `~/.codex/config.toml`도 없을 때 `/mnt/c/Users/*/.codex/config.toml` 아래의 단일 Windows Codex Desktop home도 확인합니다. 후보가 정확히 하나면 그 디렉터리를 사용하므로 WSL app-server mode와 Windows Codex Desktop이 같은 config와 auth 파일을 공유합니다. 이 탐지를 덮으려면 `CODEX_HOME`을 명시하세요.
+WSL에서는 `CODEX_HOME`이 비어 있고 Linux `~/.codex` 디렉터리가 없거나 Codex 상태(`config.toml`, `auth.json`, `sessions`, `history.jsonl`)가 전혀 없을 때 `/mnt/c/Users/*/.codex/config.toml` 아래의 단일 Windows Codex Desktop home도 확인합니다. 후보가 정확히 하나면 그 디렉터리를 사용하므로 WSL app-server mode와 Windows Codex Desktop이 같은 config와 auth 파일을 공유합니다. 이 탐지를 덮으려면 `CODEX_HOME`을 명시하세요.
 
 Windows에서 Orca shell은 `CODEX_HOME`과 `ORCA_CODEX_HOME`을 Orca의 번들 런타임 home으로 설정할 수 있지만, ChatGPT/Codex app은 여전히 `%USERPROFILE%\\.codex`를 읽습니다. `ocx status`와 `ocx doctor`는 이 정확한 불일치를 경고하고, 경로는 가린 채 대상 home을 출력합니다. 해당 Orca shell에서 background service를 설치했다면 먼저 원래 shell에서 uninstall하고, `CODEX_HOME`을 app home으로 설정한 뒤 `ORCA_CODEX_HOME`을 해제하고, sync/restore를 다시 실행한 다음 service를 다시 설치하세요.
 
@@ -256,6 +256,8 @@ Codex는 디스크의 카탈로그(`$CODEX_HOME/opencodex-catalog.json`이 기�
 `exec` 진입점과 Browser 및 Computer Use를 포함한 중첩 MCP 도구를 노출할 수 있으며, opencodex는 모델의 일반
 function call만 라우팅합니다. 도구 실행, 권한, 확인은 Codex에 그대로 남고 opencodex가 별도의 browser 또는
 desktop-control executor를 구현하지는 않습니다.
+
+라우팅된 Responses 턴에서 도구 선언 검증이 명시적으로 켜져 있으면, 선언된 도구 목록을 사용할 수 없을 때도 클라이언트 도구 호출을 거부합니다. 명시적으로 빈 목록은 모든 클라이언트 도구 호출을 거부합니다. Chat과 Anthropic 클라이언트의 도구 검증 책임은 그대로 유지됩니다.
 
 Codex의 `exec` custom-tool grammar를 허용하지 않는 key-auth Responses provider의 경우, opencodex는 해당 선언과
 history를 업스트림 function tool로 인코딩한 다음 스트리밍된 function-call lifecycle을 Codex에 전달하기 전에
@@ -355,6 +357,8 @@ ChatGPT 계정을 추가하거나 재인증할 때 OpenCodex는 일반적으로 
 새 OAuth 토큰으로 인증된 사용량 조회에서 5시간·주간·월간 한도 소진이 확인되면 모델 요청 없이 계정을 저장하고 **검증 대기**로 표시합니다. 재시작이나 토큰 갱신 후에도 요청에 사용되지 않습니다. 한도 회복 후 **사용량 새로고침**을 실행하면, 여유가 있는 완전한 최신 사용량을 확인한 뒤 작은 모델 요청을 보내고 완료 응답을 받아야 계정을 사용할 수 있습니다. 조회나 검증 실패 시 대기 상태를 유지합니다. 일반적인 화면 상태 조회는 이 모델 요청을 보내지 않습니다. 최초 등록 때 사용량이 불명확하면 기존 워밍업 검증이 필요합니다.
 
 `ocx account refresh openai`와 `ocx account list openai --quota --refresh`는 사용량만 조회합니다. 모델 검증은 할당량을 사용하므로 사람의 대시보드 세션이 필요합니다. 할당량이 복구되면 `ocx gui`를 열고 **Refresh quotas**를 클릭하세요. 헤드리스 호스트도 브라우저에서 해당 대시보드에 접속해야 하며, 관리자 토큰만으로는 검증할 수 없습니다. 일시 정지된 계정도 검증할 수 있지만 일시 정지를 해제하거나 계정을 선택하지는 않습니다. 모델 인증 실패 표시는 검증 또는 재인증에 성공할 때까지 유지됩니다.
+
+**Codex Set → Multi-auth**에서 **Codex Auth** 제목 줄의 **Codex 크레딧** 스위치를 켜면 메인 계정과 풀 계정의 최근 크레딧 잔액이 Week 바로 아래에 표시됩니다. 기본값은 꺼짐이며 `showCodexCredits`로 저장됩니다. 잔액은 로케일에 맞는 숫자로 표시하고, 응답에 따라 무제한 또는 초과 사용 한도 도달 안내를 표시합니다. 전체 크레딧 한도가 제공되지 않으므로 막대는 백분율이 아닌 사용 가능 상태를 나타냅니다. 스위치는 표시만 제어하며 새 로그인에는 해당 계정의 조회 결과가 필요합니다.
 
 별도의 백그라운드 재검증은 기본적으로 꺼져 있습니다. Token Guardian, `openai`의 `proactive` 갱신 정책, `tokenGuardian.codexWarmupEnabled`가 필요하며 등록 검증 대기 계정은 제외합니다.
 

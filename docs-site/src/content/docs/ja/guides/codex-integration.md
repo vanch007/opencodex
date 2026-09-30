@@ -109,7 +109,7 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-WSL では、`CODEX_HOME` が設定されておらず、Linux `~/.codex/config.toml` が存在しない場合、opencodex は `/mnt/c/Users/*/.codex/config.toml` にある単一の Windows Codex デスクトップ ホームもチェックします。候補が 1 つだけ存在する場合は、そのディレクトリが使用されるため、WSL アプリサーバー モードと Windows Codex デスクトップは同じ設定ファイルと認証ファイルを共有します。この検出をオーバーライドするには、`CODEX_HOME` を明示的に設定します。
+WSL では、`CODEX_HOME` が設定されておらず、Linux の `~/.codex` ディレクトリが存在しないか、Codex の状態 (`config.toml`, `auth.json`, `sessions`, `history.jsonl`) を持たない場合、opencodex は `/mnt/c/Users/*/.codex/config.toml` にある単一の Windows Codex デスクトップ ホームもチェックします。候補が 1 つだけ存在する場合は、そのディレクトリが使用されるため、WSL アプリサーバー モードと Windows Codex デスクトップは同じ設定ファイルと認証ファイルを共有します。この検出をオーバーライドするには、`CODEX_HOME` を明示的に設定します。
 
 Windows では、ChatGPT/Codex アプリが `%USERPROFILE%\\.codex` を読み取りながら、Orca シェルは `CODEX_HOME` と `ORCA_CODEX_HOME` の両方を Orca のバンドルされたランタイム ホームに設定できます。 `ocx status` および `ocx doctor` は、この正確な不一致について警告し、編集されたターゲット パスを出力します。バックグラウンド サービスが Orca シェルからインストールされている場合は、最初に元のシェルからアンインストールし、次に `CODEX_HOME` をアプリ ホームに設定し、`ORCA_CODEX_HOME` の設定を解除し、同期/復元を再実行して、サービスを再度インストールします。
 
@@ -245,6 +245,8 @@ ocx service install    # persistent: auto-starts on login and respawns on crash
 新しい OAuth トークンによる使用量取得で5時間・週次・月次の上限到達が確認された場合、モデルを呼ばずに保存し、**検証待ち**と表示します。再起動やトークン更新後も使用できません。上限回復後に使用量を更新すると、十分な空き容量を示す完全な最新情報を確認してから小さなモデルリクエストを送り、完了した場合のみ使用可能になります。取得や検証の失敗では待機状態を維持します。通常の状態ポーリングは検証リクエストを送りません。初回登録時の使用量が不明な場合は通常の検証が必要です。
 
 `ocx account refresh openai` と `ocx account list openai --quota --refresh` は使用量のみを取得します。モデル検証はクォータを消費するため、人間のダッシュボードセッションが必要です。回復後に `ocx gui` を開き、**Refresh quotas** をクリックしてください。ヘッドレスホストでもブラウザーからそのダッシュボードにアクセスします。管理者トークンだけでは検証できません。一時停止中でも検証できますが、アカウントの再開や選択は行いません。モデル認証エラーは検証または再認証に成功するまで表示されます。
+
+**Codex Set → Multi-auth** で **Codex Auth** 見出しの **Codex クレジット** スイッチを有効にすると、メインとプールの各アカウントで最後に取得したクレジットが Week の直下に表示されます。既定では無効で、`showCodexCredits` として保存されます。残高はロケールに合わせた数値で、報告があれば無制限または超過利用上限の警告を表示します。総上限が提供されないため、バーは割合ではなく利用可能な状態を示します。この設定は表示のみを制御し、新しいログインにはそのアカウントの取得結果が必要です。
 
 バックグラウンド再検証は別機能で既定では無効です。Token Guardian、`openai` の `proactive` 更新ポリシー、`tokenGuardian.codexWarmupEnabled` が必要で、登録検証待ちのアカウントは除外します。
 

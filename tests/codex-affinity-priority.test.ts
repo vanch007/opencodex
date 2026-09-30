@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
-import { selectPriorityTier } from "/Users/vanch/Documents/Codex/2026-08-05/https-github-com-lidge-jun-opencodex/outputs/upgrade-2.51.0/merged/src/codex/pool-rotation";
-const source = await Bun.file("/Users/vanch/Documents/Codex/2026-08-05/https-github-com-lidge-jun-opencodex/outputs/upgrade-2.51.0/merged/src/codex/routing.ts").text();
+import { selectPriorityTier } from "../src/codex/pool-rotation";
+const source = await Bun.file(new URL("../src/codex/routing.ts", import.meta.url)).text();
 // Execute the actual routing functions in a deterministic, credential-free harness.
 const extract = (name: string) => {
   const start = source.indexOf(`function ${name}(`);
