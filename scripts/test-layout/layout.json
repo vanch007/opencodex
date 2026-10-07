@@ -2,6 +2,7 @@
   "version": 1,
   "root": "tests",
   "explicit": {
+    "google-tool-progress.test.ts": "adapters/google",
     "codex-credits.test.ts": "codex-integration",
     "codex-credits-settings.test.ts": "codex-integration",
     "codex-credits-probes.test.ts": "codex-integration",

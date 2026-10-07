@@ -13,6 +13,19 @@ to their tool calls independently; they never become Anthropic thinking signatur
 
 > Decision record: [ADR-0055](../decisions/ADR-0055-google-thought-text-visibility-boundary.md)
 
+## Codex progress history
+
+`src/adapters/google-tool-progress.ts` removes the two exact legacy Chinese/English proxy status
+placeholders from assistant commentary or unphased history on Codex CCA Gemini requests. Replaying
+those placeholders teaches the model to repeat them. Empty placeholder-only messages are omitted;
+mixed messages retain real text, reasoning and signed calls. User text, longer quoted explanations,
+explicit final answers, tool arguments and results stay intact. Cleanup uses a request-local copy
+for Google serialization: the client's parsed and stored history is not rewritten.
+Image models, structured output, compaction, memory helpers, direct/Vertex Google and CCA
+non-Gemini requests are excluded. Neither parser synthesizes assistant progress. Provider-authored
+summaries and concrete execution commentary retain their native Responses channels, while the
+system instruction asks for the actual next action rather than generic proxy status wording.
+
 ## Google response-part field boundary
 
 Google-family adapters validate the values inside an otherwise well-formed response part before

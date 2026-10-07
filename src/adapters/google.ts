@@ -43,6 +43,7 @@ import {
 } from "../lib/translator-budget";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { configuredReasoningEfforts, mapReasoningEffort } from "../reasoning-effort";
+import { stripGoogleToolProgressHistory } from "./google-tool-progress";
 
 // Google-family models (Gemini/Vertex/Antigravity) tend to emit long running commentary between
 // tool calls. This steers them to keep the BETWEEN-STEP text to one line and reason internally
@@ -51,8 +52,9 @@ import { configuredReasoningEfforts, mapReasoningEffort } from "../reasoning-eff
 // providers are unaffected.
 const GOOGLE_BREVITY_INSTRUCTION = [
   "Output style for this session:",
-  "- While you are still working, emit one short visible progress line before each tool call so the user knows what you are doing.",
+  "- While you are still working, emit one short visible progress line describing the concrete next action before calling tools, and summarize observed results when available.",
   "- Keep private chain-of-thought internal; the visible line should only summarize the next action and current status.",
+  "- Do not imitate generic tool-running or proxy status placeholders in the conversation history; describe the actual file, check, or task step instead.",
   "- Prefer taking the next tool action over long narration; keep calling tools until the task is complete.",
   "- This applies only to intermediate progress text. Your final answer after the work is done is exempt: write it in full and at whatever length the task requires.",
   "- Formatting: The client environment renders standard Markdown and does not support LaTeX math delimiters ($...$, $$...$$, \\(...\\), \\[...\\]). Do not use LaTeX math delimiters or LaTeX markup (such as \\text{}, \\times, \\le, \\ge, etc.) for variables, formulas, dimensions, or units. Use clean plain text, Markdown, and Unicode symbols (e.g. 180°, 2560 × 1920 px, ≤, ≥, Δ, ±) instead.",
@@ -988,13 +990,14 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           : resolveDirectGeminiWireModelId(parsed.modelId, provider.directGeminiWireRenames !== false);
       returnsThoughtSummaries = provider.googleMode === "cloud-code-assist"
         && /^gemini-/.test(routedModelId) && !isImageCapableModel(parsed.modelId);
+      const replayRequest = stripGoogleToolProgressHistory(parsed, returnsThoughtSummaries);
       // AI Studio's `-tiered` spelling is wire-only; CCA aliases may migrate to another generation.
       const identityModelId = provider.googleMode === "cloud-code-assist" ? routedModelId : parsed.modelId;
       const isCloudCodeAssist = provider.googleMode === "cloud-code-assist";
       const stripRejectedClaudeSdkParagraph = isCloudCodeAssist
         && rejectsClaudeSdkParagraph(parsed.modelId, routedModelId);
       const { systemInstruction, contents, replayedCallIds } = messagesToGeminiFormat(
-        parsed,
+        replayRequest,
         identityModelId,
         stripRejectedClaudeSdkParagraph,
         isCloudCodeAssist,
@@ -1401,12 +1404,13 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
               toolCallsStarted++;
               emittedContentEvent = true;
               const restoredName = restoreGoogleToolName(functionCall.name);
-              yield {
+              const toolStart: AdapterEvent = {
                 type: "tool_call_start",
                 id,
                 name: restoredName,
                 ...googleToolCallMetadataFromPart(part, pendingStreamThoughtSig),
               };
+              yield toolStart;
               yield { type: "tool_call_delta", arguments: JSON.stringify(functionCall.args ?? {}) };
               yield { type: "tool_call_end" };
             }
@@ -1671,12 +1675,13 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           if (functionCall) {
             const id = `call_${crypto.randomUUID().slice(0, 8)}`;
             toolCallsStarted++;
-            events.push({
+            const toolStart: AdapterEvent = {
               type: "tool_call_start",
               id,
               name: restoreGoogleToolName(functionCall.name),
               ...googleToolCallMetadataFromPart(part, pendingThoughtSig),
-            });
+            };
+            events.push(toolStart);
             events.push({ type: "tool_call_delta", arguments: JSON.stringify(functionCall.args ?? {}) });
             events.push({ type: "tool_call_end" });
           }

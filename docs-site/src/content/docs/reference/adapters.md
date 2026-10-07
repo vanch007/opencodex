@@ -303,6 +303,13 @@ MiMo model Command Code serves.
   opaque `thoughtSignature` values so tool-result continuations retain Gemini reasoning continuity.
   The signature cache is snapshotted to the config directory, so continuations also survive proxy
   restarts.
+- **Codex progress:** The proxy does not invent assistant progress messages. Antigravity Gemini
+  keeps provider-authored thought summaries and concrete execution commentary on their native
+  display channels. The two exact legacy Chinese/English `OpenCodeX` tool-status placeholders are
+  omitted from assistant commentary history before replay, so Gemini is not taught to repeat them.
+  The client's stored history, user text, quotes, final answers, tool arguments, results and
+  signatures are unchanged. Cleanup excludes structured-output, image, compaction and memory-helper
+  turns, direct/Vertex Google, and other Cloud Code Assist models.
 - **Malformed response shapes fail closed.** A claimed candidate, its `content`, or its
   `content.parts` that is not the documented container terminates the turn with a
   `google response contained invalid …` error naming the structural reason and the offending

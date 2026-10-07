@@ -124,6 +124,11 @@ interface ProviderAdapter {
 - Gemini 省略 tool-call id 时会合成 id。Vertex 与 Antigravity 会保留并重放不透明
   `thoughtSignature`，使 tool-result 后续 turn 保持 reasoning continuity。签名缓存会快照到配置
   目录，因此代理重启后后续 turn 仍可继续。
+- **Codex 进度显示：** 代理不生成虚构的助手进度。Antigravity Gemini 的真实思考摘要与具体
+  执行说明沿原生显示通道透传；回放给模型前，仅过滤助手进度历史中旧版中英文两种固定
+  `OpenCodeX` 工具状态占位文字，避免模型学习并反复输出它们。客户端保存的历史、用户文字、
+  引用说明、最终回答、工具参数、结果与签名均不改动。过滤不适用于结构化输出、图像、压缩、
+  记忆辅助回合、direct/Vertex Google 和 Cloud Code Assist 的其他模型。
 
 ## `kiro`
 
