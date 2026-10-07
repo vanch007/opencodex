@@ -138,7 +138,7 @@ The shared Responses path follows the [bounded multipart recovery contract](../s
   usage-based account changes; reactive recovery remains independent.
 - **Header parity:** per-attempt `x-grok-req-id` (fresh UUID inside the transport fetch
   wrapper), stable session/conv affinity headers, always-set User-Agent, and a single
-  compatibility profile const for the Grok client version (`src/providers/xai-transport.ts`);
+  compatibility profile const set to `1.0.13` for the Grok client version (`src/providers/xai-transport.ts`);
   `fetchWithHeaderTimeout` takes an executor so provider fetch wrappers stay inside the
   timeout race.
 

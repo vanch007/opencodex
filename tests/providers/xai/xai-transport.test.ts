@@ -110,7 +110,7 @@ describe("xAI auth-mode transport selection", () => {
     expect(request.headers).toMatchObject({
       Authorization: "Bearer oauth-token",
       "x-grok-client-identifier": "opencodex",
-      "x-grok-client-version": XAI_GROK_CLIENT_VERSION,
+      "x-grok-client-version": "1.0.13",
       "x-xai-token-auth": "xai-grok-cli",
     });
   });
@@ -122,7 +122,7 @@ describe("xAI auth-mode transport selection", () => {
     expect(request.headers).toMatchObject({
       Authorization: "Bearer oauth-token",
       "x-grok-client-identifier": "opencodex",
-      "x-grok-client-version": XAI_GROK_CLIENT_VERSION,
+      "x-grok-client-version": "1.0.13",
       "x-xai-token-auth": "xai-grok-cli",
     });
   });

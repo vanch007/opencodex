@@ -99,7 +99,7 @@ ocx logout <provider>
 
 | 提供商 | Adapter | 基础 URL | 备注 |
 | --- | --- | --- | --- |
-| `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth 使用独立的 Grok CLI 订阅网关。API 密钥覆盖模式使用 `https://api.x.ai/v1`，并可能注入 Priority Processing。优先使用实时 Grok 目录；回退默认模型为 `grok-4.5`。 |
+| `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth 使用独立的 Grok CLI 订阅网关，客户端兼容版本为 `1.0.13`。如果网关因旧代理版本返回 HTTP 426，应更新 opencodex；仅更新本地 Grok CLI 不会改变此代理标识。API 密钥覆盖模式使用 `https://api.x.ai/v1`，并可能注入 Priority Processing。优先使用实时 Grok 目录；回退默认模型为 `grok-4.5`。 |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude 模型；实时模型列表从 `/v1/models` 获取。 |
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi Code Plan 编程模型。默认使用稳定的 `kimi-for-coding` 别名（当前指向 K2.8 Preview）：100 万 token 上下文、可调 `low`/`high`/`max` 思考档（默认 `max`）、支持文本 + 图片输入。已下架的 `kimi-k2.x` 选择会在升级时自动迁移到该别名。进阶：添加 `kimi-responses` 预设可让同一 Kimi 账号登录走 OpenAI Responses 协议（思考内容在服务端保持加密，工具调用保持可见；Chat 预设保留明文推理）。 |
 | `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | 同一 Kimi 账号登录（复用 `kimi` 的 OAuth 凭据）走 OpenAI Responses 协议。模型名单与能力与 `kimi` 相同；思考内容在服务端保持加密，工具调用与结果保持可见。 |
