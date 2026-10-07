@@ -1,3 +1,4 @@
+import { rotateAnthropicAccountOnResponse } from "../../oauth/anthropic-account-refusal";
 import type { ResponsesRequestContext } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
@@ -34,8 +35,6 @@ import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { bindRouteReasoningReplayScope } from "./core-replay";
 import {
   ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
-  rotateAnthropicAccountOn429,
-  recordAnthropicAccount429,
   getAnthropicPoolAccessSnapshot,
   formatAnthropicProviderForLog,
 } from "../../oauth/anthropic-routing";
@@ -160,6 +159,8 @@ export function createAdapterContinuations(
   const fetchTerminalGuardContinuation = async function* (
     nextParsed: OcxParsedRequest,
     initialRecoveryKind?: AttemptRecoveryKind,
+    // Ordinary terminal continuations have already delivered output; empty retries opt in.
+    allowAccountRefusal = false,
   ): AsyncGenerator<AdapterEvent> {
     let response: Response | undefined;
     let kiroRefusalPendingReplay: Response | undefined;
@@ -391,25 +392,21 @@ export function createAdapterContinuations(
         }
       }
      if (
-       response.status === 429
+       (response.status === 429 || response.status === 403)
        && transportState.anthropicPoolAccountId
         && !isNonReplayableResponse(response)
-       && transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST
       ) {
-        const nextAccountId = rotateAnthropicAccountOn429(
-          config,
-          transportState.anthropicPoolAccountId,
-          response.headers.get("retry-after"),
-          anthropicSessionKey,
-          Date.now(),
-          response.headers,
-          transportState.anthropicRouteDecision,
-        );
+        const nextAccountId = await rotateAnthropicAccountOnResponse(response, {
+          config, accountId: transportState.anthropicPoolAccountId, sessionKey: anthropicSessionKey,
+          model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, signal: upstream.signal,
+          canRetry: !sendBudgetExhausted() && transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
+          allowAccountRefusal, allow429Recovery: allowAccountRefusal,
+        });
         if (nextAccountId) {
-          try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
           try {
             const admitted = await commitResolvedOAuthSelection(await getAnthropicPoolAccessSnapshot(nextAccountId));
             if (!admitted) throw new Error("OAuth selection changed during recovery");
+            try { void response.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
             transportState.anthropicPoolAccountId = admitted.accountId;
             transportState.anthropicPoolFailovers += 1;
             route.provider = { ...route.provider, apiKey: admitted.accessToken };
@@ -427,11 +424,6 @@ export function createAdapterContinuations(
             // fall through to emit continuation error below
           }
         }
-      }
-      if (response.status === 429 && transportState.anthropicPoolAccountId
-        && transportState.anthropicPoolFailovers >= ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST) {
-        recordAnthropicAccount429(config, transportState.anthropicPoolAccountId,
-          response.headers.get("retry-after"), Date.now(), response.headers);
       }
       // Generic OAuth rotation for the continuation loop. The streaming loop grew this arm with
       // #2568 and this one did not, so an xAI/Cursor/Kimi/Copilot/Antigravity/Nous continuation
@@ -544,7 +536,7 @@ export function createAdapterContinuations(
      if (
        (response.status === 429 || (response.status === 403
          && route.providerName === "google-antigravity"
-         && isAntigravityAccountVerificationError(403, await response.clone().text())))
+         && isAntigravityAccountVerificationError(403, await readDisplaySafeErrorText(response.clone(), upstream.signal, ""))))
        && transportState.genericFailoverAccountId
         && !isNonReplayableResponse(response)
        && (response.status === 403 || (transportState.genericFailovers < transportState.genericFailoverLimit
@@ -715,14 +707,14 @@ export function createAdapterContinuations(
   };
 
   const fetchGuardedEmptyCompletionRetry = (): AsyncIterable<AdapterEvent> => {
-    const retryEvents = fetchTerminalGuardContinuation(parsed, "empty-completion");
+    const retryEvents = fetchTerminalGuardContinuation(parsed, "empty-completion", true);
     return terminalGuardEnabled
       ? guardTerminalEventStream({
           parsed,
           firstEvents: retryEvents,
           adapterName: transportState.activeAdapter.name,
           maxAutoContinuations: 1,
-          continuation: fetchTerminalGuardContinuation,
+          continuation: next => fetchTerminalGuardContinuation(next, undefined, !parsed.stream),
         })
       : retryEvents;
   };

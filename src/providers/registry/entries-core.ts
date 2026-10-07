@@ -20,6 +20,7 @@ import {
   ANTHROPIC_MODEL_CONTEXT_WINDOWS,
   ANTHROPIC_MODEL_INPUT_MODALITIES,
   ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+  ANTHROPIC_MODEL_MAX_OUTPUT_TOKENS,
   ANTHROPIC_MODEL_REASONING_EFFORTS,
   ZAI_GLM_52_REASONING_EFFORTS,
   ZAI_GLM_53_REASONING_EFFORTS,
@@ -155,6 +156,24 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // multimodal hosts (Claude/Gemini/GPT/Kimi/Grok) take native SelectedImage. The catalog
     // still advertises image for noVision members so Codex can attach (sidecar option B).
     noVisionModels: [...CURSOR_NO_VISION_MODELS],
+  },
+  {
+    id: "zed",
+    label: "Zed Hosted AI (experimental)",
+    adapter: "zed",
+    baseUrl: "https://cloud.zed.dev",
+    authKind: "oauth",
+    featured: false,
+    dashboardPreset: true,
+    models: [],
+    liveModels: true,
+    defaultModel: "auto",
+    modelDiscovery: {
+      url: "https://cloud.zed.dev/models",
+      maxResponseBytes: 4 * 1024 * 1024,
+      maxModels: 2_000,
+    },
+    note: "Experimental and unofficial Zed Hosted AI bridge, not endorsed by Zed. Use at your own risk: it consumes the signed-in Zed account's hosted-model entitlement and may be outside Zed's terms, and Zed may limit or suspend the account.",
   },
   {
     // The canonical Cognition account provider, after absorbing `devin-cli`
@@ -489,6 +508,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // Codex omits max_output_tokens; without a provider budget the Anthropic adapter
     // falls back to 8192, which truncates long answers with stop_reason=max_tokens.
     defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+    modelMaxOutputTokens: { ...ANTHROPIC_MODEL_MAX_OUTPUT_TOKENS },
     defaultModel: "claude-sonnet-5",
     // Claude fast mode on the subscription lane (Claude Code `/fast`): the OAuth route accepts
     // `speed` and gates it on account entitlement (usage credits / org enablement), probed live
@@ -516,6 +536,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     modelInputModalities: { ...ANTHROPIC_MODEL_INPUT_MODALITIES },
     modelReasoningEfforts: { ...ANTHROPIC_MODEL_REASONING_EFFORTS },
     defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+    modelMaxOutputTokens: { ...ANTHROPIC_MODEL_MAX_OUTPUT_TOKENS },
     defaultModel: "claude-sonnet-5",
     fastWire: ANTHROPIC_FAST_WIRE,
     modelSupportsServiceTier: { ...ANTHROPIC_FAST_MODELS },
