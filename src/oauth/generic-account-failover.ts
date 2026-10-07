@@ -6,7 +6,7 @@
  * exists is Anthropic's — behind its own opt-in. So xAI, Cursor, Kimi, GitHub Copilot,
  * Antigravity and Nous have no recovery path on a 429 even with several accounts logged in.
  *
- * Deliberately narrower than the Anthropic pool: no session affinity, no quota-ranked selection,
+ * Deliberately narrower than the Anthropic pool: no session affinity,
  * no probe leases. Those carry provider-specific meaning; this module only answers "the account
  * that just 429'd is cooled, is there another one we may use".
  *
@@ -20,6 +20,7 @@ import type { ProviderAccount } from "./types";
 import { getValidAccessSnapshotForAccount, type OAuthAccessSnapshot } from "./index";
 import {
   accountHeadroomPercent,
+  antigravityAccountWeeklyResetAt,
   exhaustedCooldownMs,
   hasHeadroomEvidence,
   isAccountQuotaExhausted,
@@ -324,7 +325,8 @@ export function rotateAntigravityAccountOnAuthRefusal(
   const order = set.accounts.map(row => row.id);
   const start = order.indexOf(failedAccountId);
   const ring = start >= 0 ? [...order.slice(start + 1), ...order.slice(0, start)] : order;
-  return ring.find(id => id !== failedAccountId && eligible.has(id)) ?? null;
+  return rankAccountsByHeadroom("google-antigravity",
+    ring.filter(id => id !== failedAccountId && eligible.has(id)), requestedModelId)[0] ?? null;
 }
 
 /** Generic pool strategies the kernel can actually run. `quota` IS the pre-kernel path. */
@@ -714,7 +716,10 @@ export function preferredInitialAccount(
   }
 
   const activeRow = selected.accounts.find(account => account.id === active);
-  if (activeRow && activeRow.paused !== true && activeRow.needsReauth !== true
+  // Weekly activation is request-scoped, not active-account stickiness: preserve untouched reserves.
+  const hasStartedAntigravityWeek = providerName === "google-antigravity"
+    && order.some(id => antigravityAccountWeeklyResetAt(id, requestedModelId, now) !== null);
+  if (!hasStartedAntigravityWeek && activeRow && activeRow.paused !== true && activeRow.needsReauth !== true
     && !isCooled(providerName, activeRow.id, now, classifyModelFamilyForQuota(providerName, requestedModelId))
     && !isAccountQuotaExhausted(providerName, activeRow.id, requestedModelId, activeRow)) return null;
 

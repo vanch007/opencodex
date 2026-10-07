@@ -16,11 +16,12 @@ import { atomicWriteFile, getConfigDir } from "../config";
 import type { ProviderQuota } from "./quota-types";
 import type { KiroPersistedQuota, KiroPersistedVerdict } from "./kiro-account-state-disk";
 import { ACCOUNT_QUOTA_TTL_MS } from "./quota-wire";
+import { antigravityActiveWeeklyResetAt } from "./quota/antigravity-window-policy";
 
 const FILENAME = "provider-account-quota-cache.json";
 
 /**
- * Older than this and the snapshot is discarded on load.
+ * Older than this and the snapshot is discarded on load, except a running Antigravity week.
  *
  * Six hours matches the Codex cache. A stale bar is still better than none for ORDERING —
  * it decides which account to try first, and a wrong guess costs one 429 that rotation
@@ -50,7 +51,8 @@ export function readPersistedAccountQuotas(now = Date.now()): Map<string, Provid
     for (const [key, quota] of Object.entries(parsed.rows)) {
       if (!quota || typeof quota !== "object" || typeof quota.updatedAt !== "number"
         || !Number.isFinite(quota.updatedAt)) continue;
-      if (now - quota.updatedAt > DISK_MAX_AGE_MS) continue;
+      if (now - quota.updatedAt > DISK_MAX_AGE_MS
+        && !(key.startsWith("google-antigravity\u0000") && antigravityActiveWeeklyResetAt(quota, undefined, now) !== null)) continue;
       if (key.startsWith("kiro\0") && (quota.updatedAt > now
         || typeof (quota as KiroPersistedQuota).identity !== "string"
         || !/^[a-f0-9]{64}$/.test((quota as KiroPersistedQuota).identity))) continue;

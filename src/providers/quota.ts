@@ -36,7 +36,7 @@ import {
   type ProviderQuotaResponse,
 } from "./quota/report-cache";
 import {
-  accountCacheKey,
+  accountCacheKey, commitProbedAccountQuota,
   accountQuotaCache,
   accountQuotaInflight,
   explicitAccountEpoch,
@@ -418,7 +418,7 @@ async function fetchAccountQuota(
 ): Promise<AccountQuotaCacheEntry> {
   if (accountQuotaProbeSkip(provider, accountId)) return accountQuotaProbeSkip(provider, accountId)!;
   if (explicitAccountReader(provider)) return fetchExplicitAccountQuota(provider, accountId, forceRefresh, providerConfig);
-  if (provider === "anthropic" || provider === "kiro") hydrateAccountQuotaCache();
+  if (provider === "anthropic" || provider === "kiro" || provider === "google-antigravity") hydrateAccountQuotaCache();
   const key = accountCacheKey(provider, accountId);
   const writerGeneration = captureConfigGeneration();
   const kiroIdentity = provider === "kiro" ? kiroProbeIdentity(accountId) : undefined;
@@ -507,7 +507,7 @@ async function fetchAccountQuota(
       };
       if (mayCommitAccountQuotaKey(key, writerGeneration)
         && (provider !== "kiro" || kiroProbeCurrent(accountId, kiroIdentity))) {
-        accountQuotaCache.set(key, entry);
+        commitProbedAccountQuota(key, entry);
         if (provider === "kiro") { commitKiroAccountUsageState(key, kiroSnapshot, kiroIdentity); persistKiroAccountState(); }
         sweepExpiredOnWrite(entry.ts);
       }

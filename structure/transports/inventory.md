@@ -293,6 +293,19 @@ the same routed model during account rotation, without bypassing their send-budg
 admission or account-snapshot pairing. The forwarding contract is covered in
 `tests/oauth/oauth-account-quota-rank.test.ts`; the core facade remains orchestration-only.
 
+Under default/quota selection, eligible Antigravity accounts with a running weekly
+deadline precede accounts without one, ordered by the nearest weekly reset before
+remaining headroom. Known five-hour or weekly exhaustion demotes that account; a
+429 cooldown, pause or reauthentication requirement still excludes it. Initial
+dispatch and quota-ranked recovery share this ordering, without activation probes.
+The explicit kernel round-robin/fill-first strategies retain their own selection.
+`src/providers/quota/antigravity-window-policy.ts` scopes activation to the requested
+family and never treats a models-fallback reset as weekly evidence. Accounting
+probes persist successful readings; live weekly deadlines survive cache sweeping
+and disk hydration until reset; models-only fallback retains an observed live week.
+Expired window percentages are unknown, not a
+fabricated fresh allowance. Covered by `tests/oauth/antigravity-reset-priority.test.ts`.
+
 ## SOCKS5 dispatch boundary
 
 `src/config/proxy-env.ts` activates configured SOCKS5 through `src/lib/proxy-env.ts`;

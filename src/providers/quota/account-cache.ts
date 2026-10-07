@@ -13,6 +13,7 @@ import { getProviderQuotaReportCache, hasQuotaRows, routingEvidence, setProvider
 import { isCanonicalCommandCodeBaseUrl, isCanonicalKimiCodeBaseUrl } from "./vendor-probes-key";
 import type { AccountQuotaMode, ProviderQuota, ProviderQuotaWindow, QuotaFailureCode } from "../quota-types";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
+import { antigravityActiveWeeklyResetAt } from "./antigravity-window-policy";
 
 /** Match oauth/index REFRESH_SKEW_MS — use stored access without refresh when still fresh. */
 const ACCOUNT_TOKEN_SKEW_MS = 60_000;
@@ -98,7 +99,8 @@ export let explicitAccountEpoch = 0;
  * Without this a restart forgets every measurement, so the pool opens its next turn with
  * no idea which account has room — the exact blindness pre-dispatch selection exists to
  * remove. A hydrated row is still subject to the ordinary TTL, so it orders the first
- * request and is replaced by a live probe immediately after.
+ * request and is replaced by a live probe immediately after. Antigravity retains its
+ * running weekly deadlines past that TTL without extending the probe freshness.
  */
 let diskHydrated = false;
 export function hydrateAccountQuotaCache(): void {
@@ -150,6 +152,24 @@ export function persistAccountQuotaCache(): void {
     }
   }, () => kiroPersistableVerdicts());
 }
+
+/** Successful probes retain Antigravity's activation deadlines across proxy restarts. */
+export function commitProbedAccountQuota(key: string, entry: AccountQuotaCacheEntry): void {
+  if (key.startsWith("google-antigravity\u0000") && entry.quota) {
+    const windows = entry.quota.customWindows ?? [];
+    const labels = new Set(windows.map(window => window.label));
+    // A models fallback lacks weekly buckets; absence cannot undo an observed activation.
+    const retainedWeeks = (accountQuotaCache.get(key)?.quota?.customWindows ?? [])
+      .filter(window => !labels.has(window.label)
+        && antigravityActiveWeeklyResetAt({ customWindows: [window], updatedAt: entry.ts }, undefined, entry.ts) !== null);
+    if (retainedWeeks.length) entry.quota = {
+      ...entry.quota, customWindows: [...windows, ...retainedWeeks],
+    };
+  }
+  accountQuotaCache.set(key, entry);
+  if (key.startsWith("google-antigravity\u0000")) persistAccountQuotaCache();
+}
+
 export const accountQuotaInflight = new Map<string, Promise<AccountQuotaCacheEntry>>();
 let lastReconciledGeneration = 0;
 let liveAccountQuotaKeys = new Set<string>();
@@ -197,6 +217,7 @@ export function accountCacheKey(provider: string, accountId: string): string {
  * Returns null when nothing is cached (or the cached row has no bars).
  */
 export function getCachedProviderAccountQuota(provider: string, accountId: string): ProviderQuota | null {
+  if (provider === "google-antigravity") hydrateAccountQuotaCache();
   const entry = accountQuotaCache.get(accountCacheKey(provider, accountId));
   if (provider === "kiro") {
     const account = getAccountSet("kiro")?.accounts.find(row => row.id === accountId);
@@ -362,6 +383,7 @@ export function sweepExpiredProviderAccountQuotaRows(now = Date.now()): number {
       ? Math.max(entry.ts, entry.quota?.updatedAt ?? 0)
       : entry.ts;
     if (retainedAt + ACCOUNT_QUOTA_TTL_MS > now) continue;
+    if (key.startsWith("google-antigravity\u0000") && antigravityActiveWeeklyResetAt(entry.quota, undefined, now) !== null) continue;
     accountQuotaCache.delete(key);
     removed += 1;
   }

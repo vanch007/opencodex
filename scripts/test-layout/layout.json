@@ -2,6 +2,7 @@
   "version": 1,
   "root": "tests",
   "explicit": {
+    "antigravity-reset-priority.test.ts": "oauth",
     "google-tool-progress.test.ts": "adapters/google",
     "codex-credits.test.ts": "codex-integration",
     "codex-credits-settings.test.ts": "codex-integration",

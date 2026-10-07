@@ -951,9 +951,18 @@ and the `ocx account strategy` / `ocx account auto-switch` / `ocx account sticky
 preference. `quotaWindow` is not part of the generic contract. Codex (`/api/codex-auth`) and Anthropic
 (`anthropicAccountPool`) keep their own contracts unchanged.
 
-Deliberately narrower than `anthropicAccountPool`: no session affinity, no quota-ranked
-selection, no probe leases. It answers one question — the account that just returned 429 is
-cooled, is there another one available.
+Deliberately narrower than `anthropicAccountPool`: no session affinity or probe leases.
+Known quota orders alternatives after the account that returned 429 is cooled.
+
+For **Google Antigravity's default/quota selection**, accounts with an already-running
+weekly window are used before untouched reserves. Among usable started accounts, the
+nearest weekly reset wins, even if another account has more remaining allowance.
+A new account is reached only when those started accounts have no usable allowance or
+are excluded by cooldown, pause or reauthentication. Gemini and Claude/3P windows are
+evaluated separately. Successful quota reads preserve running weekly deadlines across
+proxy restarts; expired window readings no longer imply exhaustion. This policy sends
+no activation messages. Missing weekly evidence retains the existing selection, and
+explicit kernel round-robin/fill-first strategies retain their configured behavior.
 
 The Codex pool and the Anthropic pool are excluded and keep their own rotation; enabling this
 changes neither. A provider with a single stored account is a strict no-op, and no cooldown is

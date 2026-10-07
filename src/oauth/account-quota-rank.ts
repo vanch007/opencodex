@@ -8,10 +8,12 @@
  * Deliberately NOT a scoring function. Percentages from different providers measure
  * different things, and a weight would invite tuning a number nobody can validate. Three
  * categories answer the only question rotation asks — "which of these is most likely to
- * serve the retry" — and within the healthy group a simple headroom sort is enough.
+ * serve the retry". Antigravity first drains started weeks by nearest reset; other
+ * healthy accounts retain the headroom ordering.
  */
 import { getCachedProviderAccountQuota, hasPassiveAccountQuota } from "../providers/quota";
 import { kiroAccountEvidence } from "../providers/kiro-usage";
+import { antigravityActiveWeeklyResetAt, antigravityWindowMatchesFamily } from "../providers/quota/antigravity-window-policy";
 import type { ProviderAccount } from "./types";
 
 /** Antigravity hosts Gemini and Claude windows on one account; ranking must not mix them. */
@@ -28,7 +30,7 @@ export function classifyModelFamilyForQuota(
   // Gemma is not Gemini: a substring/prefix match would poison Gemini ranking.
   if (/(?:^|[^a-z])gemma(?:[^a-z]|$)/.test(id)) return undefined;
   // Catalog ids are gemini-*, never a bare gem- token. Window labels still match Gem via
-  // windowMatchesFamily; this classifier is only for request model ids.
+  // antigravityWindowMatchesFamily; this classifier is only for request model ids.
   if (/(?:^|[^a-z])gemini(?:[^a-z]|$)/.test(id)) return "gem";
   if (
     /(?:^|[^a-z])claude(?:[^a-z]|$)/.test(id)
@@ -40,10 +42,9 @@ export function classifyModelFamilyForQuota(
   return undefined;
 }
 
-function windowMatchesFamily(label: string, family: QuotaModelFamily): boolean {
-  const token = label.trim().split(/[\s(/]+/)[0] ?? "";
-  if (family === "gem") return /^gem(?:ini)?$/i.test(token);
-  return /^cla(?:ude)?$/i.test(token);
+export function antigravityAccountWeeklyResetAt(accountId: string, requestedModelId?: string | null, now = Date.now()): number | null {
+  return antigravityActiveWeeklyResetAt(getCachedProviderAccountQuota("google-antigravity", accountId),
+    classifyModelFamilyForQuota("google-antigravity", requestedModelId), now);
 }
 
 /** Lower sorts earlier. Unknown sits between measured-healthy and measured-empty. */
@@ -54,8 +55,10 @@ const RANK_EXHAUSTED = 2;
 interface Ranked {
   id: string;
   bucket: number;
-  /** Remaining percentage points, descending within the healthy bucket. */
+  /** Remaining percentage points, descending after any weekly activation priority. */
   headroom: number;
+  /** Started Antigravity weeks precede untouched accounts; nearest reset wins. */
+  weeklyResetAt?: number;
   /** Preserves the caller's ring order for ties. */
   index: number;
 }
@@ -94,13 +97,23 @@ function headroomOf(provider: string, accountId: string, requestedModelId?: stri
   // the unranked ring rather than to a differently wrong answer.
   if (hasPassiveAccountQuota(provider) && Date.now() - quota.updatedAt > PASSIVE_HEADROOM_MAX_AGE_MS) return null;
   const family = classifyModelFamilyForQuota(provider, requestedModelId);
-  if (family) {
+  if (provider === "google-antigravity") {
+    const now = Date.now();
     const percents = (quota.customWindows ?? [])
-      .filter(window => windowMatchesFamily(window.label, family))
-      .map(window => window.percent)
-      .filter((value): value is number => typeof value === "number");
-    if (percents.length === 0) return null;
-    return 100 - Math.max(...percents);
+      .filter(window => !family || antigravityWindowMatchesFamily(window.label, family))
+      .filter(window => window.resetAt === undefined || (Number.isFinite(window.resetAt) && window.resetAt > now))
+      .map(window => window.percent);
+    if (!family || !quota.customWindows?.length) {
+      for (const [percent, resetAt] of [
+        [quota.fiveHourPercent, quota.fiveHourResetAt], [quota.weeklyPercent, quota.weeklyResetAt],
+      ]) {
+        if (resetAt === undefined || (Number.isFinite(resetAt) && resetAt > now)) {
+          if (percent !== undefined) percents.push(percent);
+        }
+      }
+    }
+    const valid = percents.filter(value => Number.isFinite(value) && value >= 0 && value <= 100);
+    return valid.length ? 100 - Math.max(...valid) : null;
   }
   const percents = [
     quota.fiveHourPercent,
@@ -167,19 +180,22 @@ export function rankAccountsByHeadroom(
     const account = accounts?.get(id);
     const exhaustion = provider === "kiro" && account ? kiroAccountEvidence(account).exhausted : undefined;
     const headroom = headroomOf(provider, id, requestedModelId, account);
-    if (exhaustion !== undefined || headroom !== null) sawEvidence = true;
+    const weeklyResetAt = provider === "google-antigravity" ? antigravityAccountWeeklyResetAt(id, requestedModelId) : null;
+    if (exhaustion !== undefined || headroom !== null || weeklyResetAt !== null) sawEvidence = true;
 
     if (isAccountQuotaExhausted(provider, id, requestedModelId, account)
       || (provider === "kiro" && exhaustion === undefined && headroom !== null && headroom <= 0))
       return { id, bucket: RANK_EXHAUSTED, headroom: 0, index };
-    if (headroom === null) return { id, bucket: RANK_UNKNOWN, headroom: 0, index };
-    return { id, bucket: RANK_HEALTHY, headroom, index };
+    if (headroom === null && weeklyResetAt === null) return { id, bucket: RANK_UNKNOWN, headroom: 0, index };
+    return { id, bucket: RANK_HEALTHY, headroom: headroom ?? 0, index, weeklyResetAt: weeklyResetAt ?? undefined };
   });
 
   if (!sawEvidence) return [...ring];
 
   return ranked
-    .sort((a, b) => (a.bucket - b.bucket) || (b.headroom - a.headroom) || (a.index - b.index))
+    .sort((a, b) => (a.bucket - b.bucket)
+      || ((a.weeklyResetAt ?? Infinity) - (b.weeklyResetAt ?? Infinity))
+      || (b.headroom - a.headroom) || (a.index - b.index))
     .map(entry => entry.id);
 }
 
@@ -211,6 +227,7 @@ export function hasHeadroomEvidence(
   }
   return ids.some(id =>
     headroomOf(provider, id, requestedModelId, accounts?.get(id)) !== null
+    || (provider === "google-antigravity" && antigravityAccountWeeklyResetAt(id, requestedModelId) !== null)
     || (provider === "kiro" && accounts?.get(id) !== undefined
       && kiroAccountEvidence(accounts.get(id)!).exhausted !== undefined));
 }
