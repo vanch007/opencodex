@@ -326,7 +326,7 @@ describe("provider and model aliases", () => {
       expect(fetchCalls).toBe(1); // Exactly one outbound fetch
       const entries1 = buildCatalogEntries(null, [], models1);
       const e1 = entries1.find(e => e.slug === "google-antigravity/gemini-3.8-flash")!;
-      expect(e1.display_name).toBe("agy/gemini-3.8-flash");
+      expect(e1.display_name).toBe("gemini-3.8-flash");
 
       // 2. Second gather inside TTL with conflicting ownership: cached row is re-hinted to canonical Google display
       const cConflicting = {
@@ -358,12 +358,12 @@ describe("provider and model aliases", () => {
       const e2 = entries2.find(e => e.slug === "google-antigravity/gemini-3.8-flash")!;
       expect(e2.display_name).toBe("google-antigravity/gemini-3.8-flash");
 
-      // 3. Third gather inside TTL (inverse direction): conflict removed, cached row re-hints back to agy
+      // 3. Conflict removed: the local picker uses its short model name again.
       const models3 = await gatherRoutedModels(cAlone);
       expect(fetchCalls).toBe(1); // Cache hit, zero additional fetches
       const entries3 = buildCatalogEntries(null, [], models3);
       const e3 = entries3.find(e => e.slug === "google-antigravity/gemini-3.8-flash")!;
-      expect(e3.display_name).toBe("agy/gemini-3.8-flash");
+      expect(e3.display_name).toBe("gemini-3.8-flash");
     } finally {
       clearModelCache("google-antigravity");
       clearModelCache("other");

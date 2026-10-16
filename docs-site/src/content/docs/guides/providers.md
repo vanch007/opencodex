@@ -165,6 +165,10 @@ generations map: 4.6 takes its effort as a thinking level, 5.5 as its `-low`, `-
 prefers an account whose discovery lists the requested model. Saved selections of models that left
 the list keep routing as before.
 
+Models Google explicitly marks `disabled: true`, such as `gemini-4-argon-disabled`, are omitted
+from discovery and do not establish account entitlement. A model's display name alone does not
+mean that account can use it.
+
 To check which mode a provider is actually using, open it on the Providers page: the **Connection**
 block's **Authentication** row reads `OAuth`, `API key`, `ChatGPT passthrough`, `Local`, or
 `No key needed`. It is a provider-level setting, so the account rows below it do not repeat it.

@@ -113,6 +113,8 @@ ocx logout <provider>
 
 Google Antigravity 账户和提供方的配额查询（包括模型列表回退）使用固定的 Google 计量端点。这些目标支持透明 Fake-IP DNS，同时保留 TLS 验证、重定向拒绝和私有地址检查。自定义 base URL 仅改变模型请求，不改变配额目标；`NO_PROXY` 仍使用直连策略。
 
+Google 明确标记为 `disabled: true` 的模型（例如 `gemini-4-argon-disabled`）不会进入发现目录，也不代表账号已获得权限。仅返回模型名称不能证明该账号可以使用它。
+
 ### Google 工具架构损失诊断
 
 Google 工具声明会按所选端点类别进行编译。通过 `ocx debug provider on`、仪表盘 Logs 开关或

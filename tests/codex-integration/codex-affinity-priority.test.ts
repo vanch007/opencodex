@@ -1,10 +1,12 @@
 import { test, expect } from "bun:test";
 import { selectPriorityTier } from "../../src/codex/pool-rotation";
 import { repoPath } from "../helpers/repo-root";
-const source = await Bun.file(repoPath("src/codex/routing.ts")).text();
-// Execute the actual routing functions in a deterministic, credential-free harness.
+const source = await Bun.file(repoPath("src/codex/routing/selection.ts")).text();
+// Priority applies to unbound placement; warm-thread failback is covered by
+// codex-priority-failback.test.ts under the upstream opt-in contract.
 const extract = (name: string) => {
   const start = source.indexOf(`function ${name}(`);
+  if (start < 0) throw new Error(`Missing selection function: ${name}`);
   const end = source.indexOf("\n}\n", start) + 2;
   return source.slice(start, end);
 };
@@ -16,34 +18,24 @@ function harness(eligible = ["plus", "prolite"], pin?: string) {
     hasCodexQuotaHeadroom: () => true,
     codexAccountPriorityLookup: () => priority,
     pickLowestUsageAmong: (_: unknown, ids: string[]) => ids[0] ?? null,
-    normalizeAccountPoolStrategy: (s: string) => s ?? "quota",
-    computeCodexUsageScore: () => 10,
-    getAccountQuota: () => ({}), getPoolAccountPlanForSelection: () => "plus",
-    isUnknownUsage: () => false, CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS: 60000,
-    pickLowerUsageAccount: () => null,
-    isThreadAffinityExpired: () => false, isThreadAffinityGenerationLive: () => true,
-    isCodexAccountSelectable: () => true, shouldFailover: () => false,
   };
   const js = new Bun.Transpiler({ loader: "ts" }).transformSync(
-    ["pickPriorityPreemption", "reevaluateAffinityQuota", "previewReusableAffinityAccount"].map(extract).join("\n")
-    + "\nreturn {reevaluateAffinityQuota,previewReusableAffinityAccount};",
+    extract("pickPriorityPreemption") + "\nreturn {pickPriorityPreemption};",
   );
   return new Function(...Object.keys(deps), js)(...Object.values(deps));
 }
-const entry = { accountId: "prolite", lastReevalAt: 1000 };
-test("old binding moves upward immediately in all strategies, including preview", () => {
+test("unbound placement prefers the highest eligible priority in every strategy", () => {
   const h = harness();
   for (const accountPoolStrategy of ["quota", "fill-first", "round-robin"]) {
-    expect(h.reevaluateAffinityQuota(entry, { accountPoolStrategy }, 1001)).toBe("plus");
-    expect(h.previewReusableAffinityAccount(entry, { accountPoolStrategy }, 1001)).toBe("plus");
+    expect(h.pickPriorityPreemption({ accountPoolStrategy }, "prolite", 1001)).toBe("plus");
   }
 });
 test("unavailable/model-ineligible higher tier cannot preempt", () => {
-  expect(harness(["prolite"]).reevaluateAffinityQuota(entry, {}, 1001)).toBeNull();
+  expect(harness(["prolite"]).pickPriorityPreemption({}, "prolite", 1001)).toBeNull();
 });
 test("explicit manual pin retains its priority ceiling", () => {
-  expect(harness(undefined, "prolite").reevaluateAffinityQuota(entry, {}, 1001)).toBeNull();
+  expect(harness(undefined, "prolite").pickPriorityPreemption({}, "prolite", 1001)).toBeNull();
 });
-test("higher tier already bound does not switch down", () => {
-  expect(harness().reevaluateAffinityQuota({ ...entry, accountId: "plus" }, {}, 1001)).toBeNull();
+test("an active higher tier does not switch down", () => {
+  expect(harness().pickPriorityPreemption({}, "plus", 1001)).toBeNull();
 });

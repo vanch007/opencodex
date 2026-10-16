@@ -103,6 +103,31 @@ async function discoveredIds(payload: unknown, accountId: string): Promise<strin
 }
 
 describe("Antigravity exposure follows each account's own discovery", () => {
+  test("a disabled Argon placeholder grants neither a selector nor account entitlement", async () => {
+    const disabledId = "gemini-4-argon-disabled";
+    const payload = {
+      models: {
+        ...ROSTER_46.models,
+        [disabledId]: { ...row(1_048_576), displayName: "Gemini 4 Argon", disabled: true },
+      },
+      agentModelSorts: [{ groups: [{ modelIds: [...Object.keys(ROSTER_46.models), disabledId] }] }],
+    };
+    const ids = await discoveredIds(payload, "acct-disabled");
+    expect(ids).toEqual(["claude-opus-4-6-thinking", "claude-sonnet-4-6", "gemini-3.8-flash"]);
+    expect(antigravityAccountSupportsModel(PROVIDER, "acct-disabled", "gemini-4-argon")).toBe(false);
+  });
+
+  test("disabled effort tiers are omitted while explicitly enabled siblings remain", () => {
+    const payload = {
+      ...ROSTER_55,
+      models: Object.fromEntries(Object.entries(ROSTER_55.models).map(([id, info]) => [
+        id, { ...info, disabled: id.startsWith("gemini-4-argon-") },
+      ])),
+    };
+    expect(parseAntigravityAvailableModels(payload)?.map(model => model.id).sort())
+      .toEqual(["claude-opus-5-5", "claude-sonnet-5-5", "gemini-3.8-flash"]);
+  });
+
   test("a Claude 4.6 account exposes 4.6 and hides the static 5.5 and Argon rows", async () => {
     const ids = await discoveredIds(ROSTER_46, "acct-46");
     expect(ids).toEqual(["claude-opus-4-6-thinking", "claude-sonnet-4-6", "gemini-3.8-flash"]);
