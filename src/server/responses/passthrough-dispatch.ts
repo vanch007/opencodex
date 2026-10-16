@@ -1,3 +1,4 @@
+import { spendLedgerStorageErrorResponse } from "./spend-storage-error";
 import { createSteeringSettingsNormalizer } from "./native-steering-policy";
 import { nativeResponseControlEligible } from "./native-response-control";
 import { NativeInjectionReplay } from "./native-injection-replay";
@@ -8,10 +9,11 @@ import type {
   PassthroughAdmissionState,
 } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
-import type { ResponsesTransport } from "./request-transport";
+import { CopilotAutoAdapterHandoff, type ResponsesTransport } from "./request-transport";
 import type { ResponsesEffects } from "./response-effects";
 import type { ResponsesSendBudget } from "./request-send-budget";
 import { transientSendCapFor } from "./request-send-budget";
+import { renewMainQuotaDispatchForAttempt } from "../../codex/main-account-cache";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { isLocalUpstream } from "../../lib/local-upstream";
 import { codexSafetyBufferingFilterOptions, terminalStatusFromParsed } from "../relay";
@@ -19,6 +21,7 @@ import { imageGenToolCallAliases } from "../responses-image-gen-repair";
 import { rememberResponseState, isBodyNonPersistable } from "../../responses/state";
 import {
   currentTurnWireToolCatalogBody,
+  hasExplicitEmptyToolCatalog,
   hasExplicitWireToolCatalog,
   collectDeclaredWireToolNames,
   collectDeclaredBareWireToolNames,
@@ -89,7 +92,8 @@ import {
   safeHostLabel,
 } from "./fetch-helpers";
 import { classifyPoolRecoveryDispatch } from "../../routing/probe-lease";
-import { clientCancelledResponse, readDisplaySafeErrorText } from "./core-errors";
+import { anthropicPoolCooldownResponse, clientCancelledResponse } from "./core-errors";
+import { canRecoverGenericOAuthResponse, rotateAntigravityVerificationAccount } from "./generic-oauth-recovery";
 import {
   upstreamHostCircuitOpenResponse,
   usesCodexForwardPoolAuth,
@@ -99,6 +103,8 @@ import {
   shouldRetryCodexPoolAccountQuota,
   shouldRetryCodexPoolAccountTransient,
   retryCodexPoolOnAlternateAccount,
+  PoolPreOutputRefusals,
+  poolPreOutputRefusalHold,
 } from "./core-codex-account";
 import {
   clearCodexModelDenialEvidence,
@@ -141,10 +147,7 @@ import { AnthropicAccountCooldownError } from "../../oauth/anthropic-routing";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import {
   hasEligibleGenericOAuthFailoverTarget,
-  isGenericOAuthFailoverEnabled,
   rotateGenericOAuthAccountOn429,
-  isAntigravityAccountVerificationError,
-  rotateAntigravityAccountOnVerificationRequired,
   failoverAccountSnapshot,
 } from "../../oauth/generic-account-failover";
 import { captureCodexAffinityDiagnostic } from "../../codex/affinity-debug";
@@ -165,6 +168,10 @@ import { ambiguousResendAllowanceFor, selfContainedResponsesBody } from "./reset
 import { upstreamErrorMessageFromPayload, ENCRYPTED_FUNCTION_OUTPUT_REJECTION } from "../../lib/errors";
 import { isTransientConsoleGoUploadRejection } from "../../providers/opencode-zen-rate-limit";
 import { planReasoningEffortDowngrade } from "../../providers/reasoning-metadata";
+import { unboundPoolSpendRefusalResponse } from "../workflow-refusal";
+
+/** Transfer an uncommitted Copilot exchange to the existing translated pipeline without new admission. */
+export interface PassthroughAdapterHandoff { kind: "adapter-handoff" }
 
 /** Prepares and recovers one native Responses exchange before client commitment. */
 export async function preparePassthroughExchange(
@@ -181,6 +188,7 @@ export async function preparePassthroughExchange(
     | "selectedForwardHeaders"
     | "clientRequestedStream"
     | "inboundWire"
+    | "clientDeclaredEmptyToolCatalog"
     | "substituteMainCredential"
     | "callerAuthHeaders"
     | "subagentFallbackAccountId"
@@ -192,6 +200,12 @@ export async function preparePassthroughExchange(
     | "passiveQuotaWriterGeneration"
     | "oauthDispatch"
     | "resolveSelectionAdapter"
+    | "resolveCopilotSelection"
+    | "copilotRefusalResponse"
+    | "oauth401ReplayAttempted"
+    | "activeAdapter"
+    | "runTurnAdapter"
+    | "invalidateSameTargetRequest"
     | "isOAuth401ReplayProvider"
     | "sentOAuthSnapshot"
     | "refreshResolvedOAuthSelection"
@@ -216,6 +230,7 @@ export async function preparePassthroughExchange(
     ResponsesSendBudget,
     | "remainingTransientSendBudget"
     | "noteTransientSends"
+    | "transientSendReporter"
     | "recoverySendAllowance"
     | "recoveryClassFor"
     | "sendBudgetExhausted"
@@ -225,6 +240,10 @@ export async function preparePassthroughExchange(
     | "pendingHopPermit"
     | "workflowRootId"
     | "sendsUsed"
+    | "targetSendsUsed"
+    | "initialSendAllowance"
+    | "noteInitialDispatch"
+    | "adapterSendBudget"
   >,
 ) {
   const { config, logCtx, options, req } = requestContext;
@@ -236,6 +255,7 @@ export async function preparePassthroughExchange(
     responseStateOptions,
     clientRequestedStream,
     inboundWire,
+    clientDeclaredEmptyToolCatalog,
     substituteMainCredential,
     callerAuthHeaders,
   } = requestState;
@@ -243,6 +263,8 @@ export async function preparePassthroughExchange(
     passiveQuotaWriterGeneration,
     oauthDispatch,
     resolveSelectionAdapter,
+    resolveCopilotSelection,
+    copilotRefusalResponse,
     isOAuth401ReplayProvider,
     refreshResolvedOAuthSelection,
     applyFailoverSnapshot,
@@ -251,6 +273,7 @@ export async function preparePassthroughExchange(
   const {
     remainingTransientSendBudget,
     noteTransientSends,
+    transientSendReporter,
     recoverySendAllowance,
     recoveryClassFor,
     sendBudgetExhausted,
@@ -511,10 +534,18 @@ export async function preparePassthroughExchange(
           declaredWireToolNames.add(name);
         }
       }
+      // Chat and Anthropic inbounds may deliver tools deferred/partially: their client registry
+      // owns the full catalog, so this guard cannot read the translated body as the authorization
+      // boundary. An explicit empty catalog — flagged by the translating ingress or present
+      // verbatim in a replayed body — is still a deny-all the caller declared; everything else
+      // stays deferred to the caller's own tool handling.
       undeclaredToolGuardActive = (
-        declaredWireToolNames.size > 0
-        || clientDeclaredNamelessCallTypes.size > 0
-        || clientExplicitWireToolCatalog
+        inboundWire === "responses"
+          ? declaredWireToolNames.size > 0
+            || clientDeclaredNamelessCallTypes.size > 0
+            || clientExplicitWireToolCatalog
+          : clientDeclaredEmptyToolCatalog
+            || hasExplicitEmptyToolCatalog(clientToolAuthorizationBody)
       ) && route.provider.authMode !== "forward";
       options.nativeControl?.configureToolAuthorization?.(
         undeclaredToolGuardActive,
@@ -726,7 +757,7 @@ export async function preparePassthroughExchange(
     // consumer's cancel to a signalled fetch, so we pass the signal and relay through relayWithAbort,
     // whose cancel() aborts the upstream — preventing leaked connections (RC2, passthrough path).
     const upstream = new AbortController();
-    linkAbortSignal(upstream, options.abortSignal);
+    const cleanupUpstreamAbort = linkAbortSignal(upstream, options.abortSignal ?? req.signal);
     const connectMs = config.connectTimeoutMs ?? 200_000;
     let upstreamResponse: Response;
     /**
@@ -752,7 +783,7 @@ export async function preparePassthroughExchange(
     const transientSendPolicy = () => transientRetryPolicyFor(route.provider);
     const transientSendAttempts = (): number => transientSendCapFor(
       transientSendPolicy()?.attempts,
-      sendBudgetState.sendsUsed,
+      sendBudgetState.targetSendsUsed,
     );
     const configuredTransientSendBudgetExhausted = (): boolean =>
       transientSendPolicy() !== null && transientSendAttempts() === 0;
@@ -796,7 +827,13 @@ export async function preparePassthroughExchange(
      */
     const sendAmbiguousReplacement = (
       signal: AbortSignal = upstream.signal,
-    ): Promise<Response> => fetchWithHeaderTimeout(
+    ): Promise<Response> => {
+      if (admissionState.authCtx.kind === "main" && admissionState.authCtx.mainQuotaDispatch) {
+        admissionState.authCtx.mainQuotaDispatch = renewMainQuotaDispatchForAttempt(admissionState.authCtx.mainQuotaDispatch);
+      }
+      const report = transientSendReporter();
+      let started = false;
+      const run = () => fetchWithHeaderTimeout(
       request.url,
       applyUpstreamRecoveryInit({
         method: request.method,
@@ -810,7 +847,7 @@ export async function preparePassthroughExchange(
         httpOnly: true,
         providerName: route.providerName,
         modelId: route.modelId,
-        dispatchOverride: oauthDispatch(request),
+        dispatchOverride: oauthDispatch(request, parsed, "passthrough"),
         beforeDispatch: headers => {
           if (signal.aborted) throw signal.reason;
           if (!transportState.selectionIsCurrent(transportState.requestBindings.get(request))) {
@@ -831,11 +868,17 @@ export async function preparePassthroughExchange(
           // Charged to the SAME request counter every other send goes through. The
           // replacement is bought here rather than by a nested retry helper, so there is
           // one charge for one send and no per-layer counter to reconcile.
-          noteTransientSends(1);
+          if (report.beforeSend?.() === false) throw new SendBudgetExhaustedError(safeHostLabel(request.url));
+          started = true;
         },
       }),
       route.provider.authMode === "forward",
     );
+      return (report.execute ? report.execute(run) : run()).finally(() => {
+        try { if (started) report(1); }
+        finally { report.close?.(); }
+      });
+    };
     /**
      * Refuse a built body that exceeds the operator's configured ceiling, before it is sent.
      *
@@ -878,9 +921,10 @@ export async function preparePassthroughExchange(
         describeOutboundBodyRefusal(result),
       );
     };
-    const transportFailureResponse = (err: unknown): Response => {
+    const transportFailureResponse = (err: unknown): Response | PassthroughAdapterHandoff => {
+      cleanupUpstreamAbort();
       upstream.abort();
-      if (options.abortSignal?.aborted) {
+      if (options.abortSignal?.aborted || req.signal.aborted) {
         releaseUpstreamHostAdmission(nativeHostState.lease);
         nativeHostState.lease = null;
         releaseCodexAuthContextProbeLease(admissionState.authCtx);
@@ -893,9 +937,21 @@ export async function preparePassthroughExchange(
         releaseUpstreamHostAdmission(nativeHostState.lease);
         nativeHostState.lease = null;
         releaseCodexAuthContextProbeLease(admissionState.authCtx);
-        return formatErrorResponse(429, "request_send_budget_exhausted", err.message);
+        return unboundPoolSpendRefusalResponse(logCtx)
+          ?? formatErrorResponse(429, "request_send_budget_exhausted", err.message);
       }
       const refusal = unwrapUpstreamRetryEvidenceError(err);
+      if (refusal instanceof CopilotAutoAdapterHandoff) {
+        bindRefreshedAdapter(refusal.adapter);
+        return handoffToChat(refusal.adapter);
+      }
+      const copilotRefusal = copilotRefusalResponse(refusal);
+      if (copilotRefusal) {
+        releaseUpstreamHostAdmission(nativeHostState.lease);
+        nativeHostState.lease = null;
+        releaseCodexAuthContextProbeLease(admissionState.authCtx);
+        return copilotRefusal;
+      }
       // Pacing may outlive the selected account's admission. No fetch occurred, so do
       // not turn an operator pause into a 502 or charge it to host/account health.
       if (refusal instanceof OAuthAccountPausedError || refusal instanceof OAuthLoginRequiredError || refusal instanceof AnthropicAccountCooldownError) {
@@ -906,12 +962,11 @@ export async function preparePassthroughExchange(
           return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(refusal));
         }
         if (refusal instanceof AnthropicAccountCooldownError) {
-          return formatErrorResponse(429, "rate_limit_error", refusal.message,
-            refusal.retryAfterSeconds === null ? undefined : { retryAfter: String(refusal.retryAfterSeconds) });
+          return anthropicPoolCooldownResponse(refusal, { comboAttempt: options.comboAttempt, logCtx });
         }
         return formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(refusal));
       }
-      const localRefusal = mapCodexAuthContextErrorToResponse(refusal, {
+      const localRefusal = spendLedgerStorageErrorResponse(err, logCtx) ?? mapCodexAuthContextErrorToResponse(refusal, {
         now: Date.now(), accountSelector: route.codexAccountNamespace,
       });
       if (localRefusal) {
@@ -957,6 +1012,14 @@ export async function preparePassthroughExchange(
     };
     const initialBodyRefusal = refuseOversizedOutboundBody(request);
     if (initialBodyRefusal) return initialBodyRefusal;
+    // A combo-owned first send is settled by the physical-dispatch receipt unless spend
+    // enforcement is on, where the shared reporter already owns the permit lifecycle.
+    // Stable per request: the Combo booking (`reserveDispatch`) already started and froze the spend
+    // policy, so `spendEnforced` cannot change before dispatch even though no reporter starts it here.
+    const receiptMode = !sendBudgetState.adapterSendBudget?.spendEnforced && Boolean(options.comboInitialSend);
+    // #6969: Pool sends hold empty lifecycle frames so a pre-output refusal reaches the ladder below.
+    const preOutputRefusals = new PoolPreOutputRefusals();
+    const preOutputRefusalHold = () => poolPreOutputRefusalHold(admissionState.authCtx, route.provider, connectMs, options.comboAttempt);
     try {
       // Transient-5xx pre-stream retry (devlog/_plan/260716_claudecode_hardening/010):
       // the ChatGPT backend emits transient 502/520s that an immediate retry absorbs.
@@ -980,24 +1043,31 @@ export async function preparePassthroughExchange(
               nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
                 && responseEffects.plaintextV2AgentMessageToolNames.size === 0
                 ? options.nativeControl : undefined,
-              dispatchOverride: oauthDispatch(request),
+              dispatchOverride: oauthDispatch(request, parsed, "passthrough"),
               providerName: route.providerName,
               modelId: route.modelId,
+              onPhysicalDispatch: receiptMode ? sendBudgetState.noteInitialDispatch : undefined,
               onCodexWsQuota: codexWsQuotaObserver(admissionState.authCtx, route.provider, route.modelId),
               beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
                 ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
+              preOutputRefusalHold: preOutputRefusalHold(),
             }),
             route.provider.authMode === "forward")
             // Every real attempt response — including an intermediate 5xx the
             // retry wrapper replaces — proves the host was reached (#914 review).
-            .then(adoptObservedResponse);
+            .then(adoptObservedResponse).then(preOutputRefusals.observe);
         },
         { abortSignal: upstream.signal, label: safeHostLabel(request.url),
-          attempts: remainingTransientSendBudget(transientSendAttempts()), onSendsConsumed: noteTransientSends,
+          attempts: sendBudgetState.initialSendAllowance(transientSendAttempts()),
+          // Reporter path: direct requests and enforced spend. Receipt-mode sends are settled
+          // by `onPhysicalDispatch`; a reporter as well would count them twice.
+          ...(receiptMode ? {} : { onSendsConsumed: transientSendReporter() }),
           claimAmbiguousResend: claimPreHeaderResend,
         },
       );
     } catch (err) {
+      preOutputRefusals.recordOnLocalExit(err, options.abortSignal?.aborted === true || req.signal.aborted,
+        config, admissionState.authCtx, route.provider, route.modelId);
       return transportFailureResponse(err);
     } finally {
       request.releaseBodyObservation?.();
@@ -1006,7 +1076,33 @@ export async function preparePassthroughExchange(
     const opaqueBlobRecoveryGuard: OpaqueBlobRecoveryGuard = { attempted: false };
     // At most one reasoning-effort downgrade per request.
     const reasoningEffortDowngradeGuard: { attempted: boolean } = { attempted: false };
-    let oauth401ReplayAttempted = false;
+    /** Rebind the refreshed wire before transferring this request to the Chat pipeline. */
+    function bindRefreshedAdapter(refreshedAdapter: typeof transportState.adapter) {
+      bindRouteReasoningReplayScope({
+        parsed,
+        providerName: route.providerName,
+        provider: route.provider,
+        adapterName: refreshedAdapter.name,
+        oauthCredentialSnapshot: transportState.replayOAuthCredentialSnapshot,
+      });
+      logCtx.providerAdapter = refreshedAdapter.name;
+      sealRequestAttemptIdentity(
+        logCtx.activeAttempt,
+        logCtx.provider,
+        refreshedAdapter.name,
+        logCtx.accountLogLabel,
+      );
+      recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, refreshedAdapter.name);
+    }
+    /** Transfer adapter ownership without retaining the native abort link or request cache. */
+    function handoffToChat(refreshedAdapter: typeof transportState.adapter) {
+      cleanupUpstreamAbort();
+      upstream.abort();
+      transportState.adapter = transportState.activeAdapter = transportState.runTurnAdapter = refreshedAdapter;
+      transportState.invalidateSameTargetRequest();
+      return { kind: "adapter-handoff" as const };
+    }
+    let oauth401ReplayAttempted = transportState.oauth401ReplayAttempted;
     let codex401ReplayKind: "main" | "stored" | null = null;
     // Console Go answers a transient 400 "Invalid upload request." for bodies it accepts
     // moments later; at most one byte-identical replay is allowed per request.
@@ -1015,7 +1111,7 @@ export async function preparePassthroughExchange(
     let rateLimitRetries = 0;
     const rebuildAndRefetch = async (
       recovery: AttemptRecoveryKind,
-    ): Promise<Response | { failed: Response }> => {
+    ): Promise<Response | { failed: Response | PassthroughAdapterHandoff }> => {
       const retryAdapter = resolveSelectionAdapter(
         resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
         config.cacheRetention,
@@ -1085,7 +1181,7 @@ export async function preparePassthroughExchange(
                 nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
                   && responseEffects.plaintextV2AgentMessageToolNames.size === 0
                   ? options.nativeControl : undefined,
-                dispatchOverride: oauthDispatch(request),
+                dispatchOverride: oauthDispatch(request, parsed, "passthrough"),
                 providerName: route.providerName,
                 modelId: route.modelId,
                 onCodexWsQuota: codexWsQuotaObserver(admissionState.authCtx, route.provider, route.modelId),
@@ -1096,7 +1192,7 @@ export async function preparePassthroughExchange(
               .then(adoptObservedResponse);
           },
           { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: allowance.attempts,
-            onSendsConsumed: noteTransientSends, claimAmbiguousResend: claimPreHeaderResend },
+            onSendsConsumed: transientSendReporter(allowance.permit), claimAmbiguousResend: claimPreHeaderResend },
         );
       } catch (err) {
         return { failed: transportFailureResponse(err) };
@@ -1192,7 +1288,7 @@ export async function preparePassthroughExchange(
             nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
               && responseEffects.plaintextV2AgentMessageToolNames.size === 0
               ? options.nativeControl : undefined,
-            dispatchOverride: oauthDispatch(request),
+            dispatchOverride: oauthDispatch(request, parsed, "passthrough"),
             providerName: route.providerName,
             modelId: route.modelId,
             onCodexWsQuota: codexWsQuotaObserver(admissionState.authCtx, route.provider, route.modelId),
@@ -1228,7 +1324,7 @@ export async function preparePassthroughExchange(
           },
           { abortSignal: upstream.signal, label: safeHostLabel(request.url),
             attempts: remainingTransientSendBudget(transientSendAttempts()),
-            onSendsConsumed: noteTransientSends, claimAmbiguousResend: claimPreHeaderResend },
+            onSendsConsumed: transientSendReporter(), claimAmbiguousResend: claimPreHeaderResend },
         );
       } catch (err) {
         return transportFailureResponse(err);
@@ -1254,7 +1350,7 @@ export async function preparePassthroughExchange(
       // fault and throw away the credential evidence the client needs.
       && !sendBudgetExhausted(transientSendAttempts())
     ) {
-      oauth401ReplayAttempted = true;
+      oauth401ReplayAttempted = transportState.oauth401ReplayAttempted = true;
       try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
       let refreshed: OAuthAccessSnapshot;
       try {
@@ -1277,7 +1373,7 @@ export async function preparePassthroughExchange(
       if (route.providerName === "kiro") {
         parsed._kiroAuthContext = { ...(refreshed.kiro ?? {}) };
       }
-      const refreshedProvider = resolveProviderTransport(
+      let refreshedProvider = resolveProviderTransport(
         route.providerName,
         {
           ...route.provider,
@@ -1290,29 +1386,21 @@ export async function preparePassthroughExchange(
           : undefined,
       );
       route.provider = refreshedProvider;
+      try { await resolveCopilotSelection(parsed); }
+      catch (err) { return transportFailureResponse(err); }
+      refreshedProvider = route.provider;
       const refreshedAdapter = resolveSelectionAdapter(
         resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider, inboundWire, route.staticPolicy),
         config.cacheRetention,
       );
+      bindRefreshedAdapter(refreshedAdapter);
       if (!("passthrough" in refreshedAdapter) || !refreshedAdapter.passthrough) {
+        if (route.providerName === "github-copilot" && refreshedAdapter.name === "openai-chat") {
+          return handoffToChat(refreshedAdapter);
+        }
         upstream.abort();
         return formatErrorResponse(502, "upstream_error", "OAuth refresh changed the provider wire unexpectedly");
       }
-      bindRouteReasoningReplayScope({
-        parsed,
-        providerName: route.providerName,
-        provider: refreshedProvider,
-        adapterName: refreshedAdapter.name,
-        oauthCredentialSnapshot: transportState.replayOAuthCredentialSnapshot,
-      });
-      logCtx.providerAdapter = refreshedAdapter.name;
-      sealRequestAttemptIdentity(
-        logCtx.activeAttempt,
-        logCtx.provider,
-        refreshedAdapter.name,
-        logCtx.accountLogLabel,
-      );
-      recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, refreshedAdapter.name);
       try {
         request = await refreshedAdapter.buildRequest(parsed, {
           headers: requestState.selectedForwardHeaders,
@@ -1345,7 +1433,7 @@ export async function preparePassthroughExchange(
                 nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
                   && responseEffects.plaintextV2AgentMessageToolNames.size === 0
                   ? options.nativeControl : undefined,
-                dispatchOverride: oauthDispatch(request),
+                dispatchOverride: oauthDispatch(request, parsed, "passthrough"),
                 providerName: route.providerName,
                 modelId: route.modelId,
                 onCodexWsQuota: codexWsQuotaObserver(admissionState.authCtx, route.provider, route.modelId),
@@ -1356,7 +1444,7 @@ export async function preparePassthroughExchange(
               .then(adoptObservedResponse);
           },
           { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(transientSendAttempts()),
-            onSendsConsumed: noteTransientSends, claimAmbiguousResend: claimPreHeaderResend },
+            onSendsConsumed: transientSendReporter(), claimAmbiguousResend: claimPreHeaderResend },
         );
       } catch (err) {
         return transportFailureResponse(err);
@@ -1367,29 +1455,12 @@ export async function preparePassthroughExchange(
 
     // Native Responses returns before the generic adapter's OAuth rotation loop. Keep
     // the same quorum, cooldown and request budget here, before any client bytes flow.
-   if (
-     (upstreamResponse.status === 429 || (upstreamResponse.status === 403
-       && route.providerName === "google-antigravity"
-       && isAntigravityAccountVerificationError(403, await readDisplaySafeErrorText(upstreamResponse.clone(), upstream.signal, ""))))
-      // Not a provider rate limit when this proxy synthesized it for a refused reset
-      // replay; rotating accounts on it would re-send an inference that may already
-      // have run and would cool down an account that refused nothing.
-      && !isNonReplayableResponse(upstreamResponse)
-     && transportState.genericFailoverAccountId
-     && (upstreamResponse.status === 403 || (transportState.genericFailovers < transportState.genericFailoverLimit
-       && isGenericOAuthFailoverEnabled(config, route.providerName)))
-    ) {
+   if (transportState.genericFailoverAccountId && await canRecoverGenericOAuthResponse(
+     config, route.providerName, transportState, upstreamResponse, upstream.signal,
+   )) {
       const verificationRequired = upstreamResponse.status === 403;
-      const verificationNextAccountId = verificationRequired && transportState.replayOAuthCredentialSnapshot?.accountId
-        === transportState.genericFailoverAccountId
-        ? await rotateAntigravityAccountOnVerificationRequired(
-          config, transportState.genericFailoverAccountId,
-          transportState.replayOAuthCredentialSnapshot.generation, Date.now(), route.modelId,
-        ) : null;
-      if (verificationRequired && !verificationNextAccountId) {
-        // Keep the provider's original denial; the account has still been retired.
-        break passthroughRecovery;
-      }
+      const verificationNextAccountId = verificationRequired ? await rotateAntigravityVerificationAccount(config, route.modelId, transportState.genericFailoverAccountId, transportState.replayOAuthCredentialSnapshot) : null;
+      if (verificationRequired && !verificationNextAccountId) break passthroughRecovery;
       // The roster cap above is one half of the bound; the request's shared budget is the
       // other. A refused hop leaves the real 429 -- body, Retry-After and any quota evidence
       // -- exactly as upstream sent it.
@@ -1398,39 +1469,51 @@ export async function preparePassthroughExchange(
         `${route.providerName}|${route.modelId}|oauth-account-${verificationRequired ? "verification" : "429"}`,
         true,
       );
-      if (hop.allowed && (!verificationRequired || verificationNextAccountId)) {
-        const nextAccountId = verificationNextAccountId ?? rotateGenericOAuthAccountOn429(
-          config, route.providerName, transportState.genericFailoverAccountId,
-          upstreamResponse.headers.get("retry-after"),
-          Date.now(),
-          route.modelId,
-        );
-        let snapshot: OAuthAccessSnapshot | undefined;
-        if (nextAccountId) {
-          try { snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId); }
-          catch { /* Keep the original 429 body readable when the next credential is unavailable. */ }
-        }
-        if (snapshot && await applyFailoverSnapshot(snapshot)) {
-          transportState.genericFailovers += 1;
-          route.provider = resolveProviderTransport(
-            route.providerName, route.provider, parsed.options.promptCacheKey, transportState.sentOAuthSnapshot?.apiBaseUrl,
+      if (hop.allowed) {
+        let transferred = false;
+        try {
+          const nextAccountId = verificationNextAccountId ?? rotateGenericOAuthAccountOn429(
+            config, route.providerName, transportState.genericFailoverAccountId,
+            upstreamResponse.headers.get("retry-after"),
+            Date.now(),
+            route.modelId,
           );
-          bindRouteReasoningReplayScope({
-            parsed, providerName: route.providerName, provider: route.provider,
-            adapterName: "openai-responses", oauthCredentialSnapshot: transportState.replayOAuthCredentialSnapshot,
-          });
+          let snapshot: OAuthAccessSnapshot | undefined;
+          if (nextAccountId) {
+            try { snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId); }
+            catch { /* Keep the original 429 body readable when the next credential is unavailable. */ }
+          }
+          if (snapshot && await applyFailoverSnapshot(snapshot)) {
+            transportState.genericFailovers += 1;
+            route.provider = resolveProviderTransport(
+              route.providerName, route.provider, parsed.options.promptCacheKey, transportState.sentOAuthSnapshot?.apiBaseUrl,
+            );
+            const rotatedAdapter = resolveSelectionAdapter(
+              resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
+              config.cacheRetention,
+            );
+            bindRefreshedAdapter(rotatedAdapter);
+            try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+            sendBudgetState.pendingHopPermit = hop.permit;
+            if (route.providerName === "github-copilot" && rotatedAdapter.name === "openai-chat") {
+              transferred = true;
+              return handoffToChat(rotatedAdapter);
+            }
+            const result = await rebuildAndRefetch(verificationRequired ? "oauth-account-verification" : "oauth-account-429");
+            sendBudgetState.pendingHopPermit = undefined;
+            if ("failed" in result) return result.failed;
+            upstreamResponse = result;
+            continue passthroughRecovery;
+          }
+        } catch (err) {
           try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already closed */ }
-          // The replay IS this hop's send, so the rebuild spends the reservation instead of
-          // asking for one of its own.
-          sendBudgetState.pendingHopPermit = hop.permit;
-          const result = await rebuildAndRefetch(verificationRequired ? "oauth-account-verification" : "oauth-account-429");
-          sendBudgetState.pendingHopPermit = undefined;
-          if ("failed" in result) return result.failed;
-          upstreamResponse = result;
-          continue passthroughRecovery;
+          return transportFailureResponse(err);
+        } finally {
+          if (!transferred) {
+            if (sendBudgetState.pendingHopPermit === hop.permit) sendBudgetState.pendingHopPermit = undefined;
+            hop.permit?.release();
+          }
         }
-        // No credential moved, so the reservation costs nothing.
-        hop.permit?.release();
       } else {
         // The activation quorum ignores cooldowns; prove that the selector has a live alternate
         // before describing this as a recovery that only the shared request budget withheld.
@@ -1493,7 +1576,7 @@ export async function preparePassthroughExchange(
                 nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
                   && responseEffects.plaintextV2AgentMessageToolNames.size === 0
                   ? options.nativeControl : undefined,
-                dispatchOverride: oauthDispatch(request),
+                dispatchOverride: oauthDispatch(request, parsed, "passthrough"),
                 providerName: route.providerName,
                 modelId: route.modelId,
                 onCodexWsQuota: codexWsQuotaObserver(admissionState.authCtx, route.provider, route.modelId),
@@ -1504,7 +1587,7 @@ export async function preparePassthroughExchange(
               .then(adoptObservedResponse);
           },
           { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(transientSendAttempts()),
-            onSendsConsumed: noteTransientSends, claimAmbiguousResend: claimPreHeaderResend },
+            onSendsConsumed: transientSendReporter(), claimAmbiguousResend: claimPreHeaderResend },
         );
       } catch (err) {
         return transportFailureResponse(err);
@@ -1607,6 +1690,7 @@ export async function preparePassthroughExchange(
           passthroughEstimate,
           stream: upstreamRequestsStream,
           httpOnly: canonicalBufferedJson,
+          preOutputRefusalHold: preOutputRefusalHold(),
           onResponse: (response, retryAuthCtx, retryRequest) => {
             adoptCodexWsStage(response);
             captureAffinityResponse(
@@ -1633,6 +1717,8 @@ export async function preparePassthroughExchange(
         }
       }
     }
+    // #6969: a projection nothing above recovered goes on as the original stream, before any reader.
+    upstreamResponse = preOutputRefusals.restore(upstreamResponse);
     // The deterministic route record cannot classify history it never observed (restart, expiry,
     // eviction, or an older transcript). Inspect only a bounded clone of a 4xx whose exact outbound
     // Responses body still carries opaque state, then rebuild once through the ordinary adapter
@@ -1860,6 +1946,7 @@ export async function preparePassthroughExchange(
   const localUpstream = isLocalUpstream(route.provider.baseUrl);
 
   return {
+    kind: undefined,
     codexSafetyBufferingOptions,
     imageGenCallAliases,
     routedCustomToolNames,
@@ -1899,7 +1986,8 @@ export async function preparePassthroughExchange(
     connectMs,
     localUpstream,
     upstreamResponse,
+    terminalOutcomeRecorded: preOutputRefusals.outcomeRecorded,
   };
 }
 
-export type PassthroughExchange = Exclude<Awaited<ReturnType<typeof preparePassthroughExchange>>, Response>;
+export type PassthroughExchange = Exclude<Awaited<ReturnType<typeof preparePassthroughExchange>>, Response | PassthroughAdapterHandoff>;
