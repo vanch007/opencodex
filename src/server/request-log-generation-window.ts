@@ -36,3 +36,16 @@ export function generationWindowFields(
     lastOutputMs: Math.max(0, lastAt - requestStartedAt),
   };
 }
+
+/** Aggregate physical fetch waits only; never infer missing timings from request duration. */
+export function recordAttemptUpstreamTiming(
+  logCtx: Pick<RequestLogContext, "activeAttempt">,
+  sample: { durationMs: number; outcome: "headers" | "error" },
+): void {
+  const attempt = logCtx.activeAttempt;
+  if (!attempt || !Number.isFinite(sample.durationMs) || sample.durationMs < 0) return;
+  const timing = attempt.upstreamTiming ??= { sends: 0, headers: 0, waitMs: 0 };
+  timing.sends += 1;
+  timing.headers += Number(sample.outcome === "headers");
+  timing.waitMs += sample.durationMs;
+}

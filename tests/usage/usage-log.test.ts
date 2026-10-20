@@ -1188,3 +1188,17 @@ describe("usage log", () => {
     expect(readBack[0].requestId).toBe("ocx-enoent-2");
   });
 });
+
+test("upstream timing survives persistence with only validated numeric fields", () => {
+  const normalize = (upstreamTiming: unknown) => normalizeUsageEntryForTest({
+    requestId: "timing", timestamp: Date.now(), provider: "google-antigravity", model: "m", status: 200,
+    durationMs: 100, usageStatus: "reported", attempts: [{ ordinal: 1, provider: "google-antigravity",
+      model: "m", adapter: "google", status: 200, durationMs: 100, sendCount: 2,
+      recoveryKinds: [], usageStatus: "reported", upstreamTiming }],
+  }).attempts?.[0];
+  expect(normalize({ sends: 2, headers: 1, waitMs: 80.5, extra: "discard" })?.upstreamTiming)
+    .toEqual({ sends: 2, headers: 1, waitMs: 80.5 });
+  for (const value of [undefined, null, {}, { sends: 1, headers: 2, waitMs: 1 },
+    { sends: 1, headers: 1, waitMs: -1 }, { sends: 1, headers: 1, waitMs: Infinity },
+    { sends: 1.5, headers: 1, waitMs: 1 }]) expect(normalize(value)).not.toHaveProperty("upstreamTiming");
+});

@@ -309,3 +309,15 @@ This is linear accumulation, not a global request-memory or execution-time bound
 `tests/providers/devin-chat-wire-fixes.test.ts` covers these boundaries and protobuf fields #7,
 #9 and #10. This normalization addresses duplicate consecutive tool prompts, not every
 upstream `invalid_argument`.
+
+## Adapter response-header timing
+
+Responses adapter dispatch records optional `attempts[].upstreamTiming` through
+`src/adapters/physical-send.ts`: `sends` counts observed executor completions (including
+rejections), `headers` counts completions returning a Response, and `waitMs` sums those
+executor waits. This includes transport preflight inside the executor, not just network time;
+it excludes earlier pacing/backoff and response-body streaming. It is not TCP connect time
+or proof of server queue time. Missing instrumentation remains absent, never zero-filled.
+`src/server/request-log-generation-window.ts` aggregates samples for the active attempt;
+`src/usage/log.ts` validates numeric fields and discards unknown fields on persistence/readback.
+Observers cannot change response ownership, errors, retries or send-budget accounting.

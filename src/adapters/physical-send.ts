@@ -41,7 +41,16 @@ export function createAdapterPhysicalSend(ctx: AdapterFetchContext = {}, fallbac
         dispatched = true;
         ordinal += 1;
         ctx.onPhysicalSend?.({ ordinal, ...(options.recovery ? { recovery: options.recovery } : {}) });
-        return (executor.unpacedFetch ?? executor)(input, init);
+        const startedAt = performance.now();
+        let outcome: "headers" | "error" = "error";
+        try {
+          const response = await (executor.unpacedFetch ?? executor)(input, init);
+          outcome = "headers";
+          return response;
+        } finally {
+          try { ctx.onUpstreamTiming?.({ durationMs: Math.max(0, performance.now() - startedAt), outcome }); }
+          catch { /* Observability must not change dispatch, response ownership or retries. */ }
+        }
       };
       return permit?.execute ? permit.execute(run) : run();
     }) as typeof globalThis.fetch;

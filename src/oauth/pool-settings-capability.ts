@@ -130,7 +130,7 @@ export function genericPoolSettingsDto(
     kind: "generic",
     enabled: typeof failover.enabled === "boolean" ? failover.enabled : null,
     strategy: parseGenericPoolStrategy(failover.strategy, name),
-    ...(name === "kiro" ? { maxConcurrentPerAccount: parseKiroAccountCap(failover.maxConcurrentPerAccount) } : {}),
+    ...((name === "kiro" || name === "google-antigravity") ? { maxConcurrentPerAccount: parseKiroAccountCap(failover.maxConcurrentPerAccount) } : {}),
     autoSwitchThreshold: parseGenericAutoSwitchThreshold(failover.autoSwitchThreshold),
     stickyLimit: parseGenericStickyLimit(failover.stickyLimit),
     inert: kernelEnabled !== true,
@@ -156,7 +156,7 @@ export function unifiedPoolSettingsDto(
   provider: string,
   kind: PoolSettingsKind,
 ): PoolSettingsDto {
-  const base = { provider, kind, supported: provider === "kiro"
+  const base = { provider, kind, supported: (provider === "kiro" || provider === "google-antigravity")
     ? [...SUPPORTED_BY_KIND.generic, "maxConcurrentPerAccount" as const] : SUPPORTED_BY_KIND[kind] };
   if (kind === "codex") {
     return {
@@ -204,7 +204,7 @@ export function unifiedPoolSettingsDto(
     stickyLimit: parseGenericStickyLimit(failover.stickyLimit),
     autoSwitchThreshold: parseGenericAutoSwitchThreshold(failover.autoSwitchThreshold),
     quotaWindow: null,
-    maxConcurrentPerAccount: provider === "kiro" ? parseKiroAccountCap(failover.maxConcurrentPerAccount) : null,
+    maxConcurrentPerAccount: (provider === "kiro" || provider === "google-antigravity") ? parseKiroAccountCap(failover.maxConcurrentPerAccount) : null,
     routes: null,
     nativeMessages: null,
   };

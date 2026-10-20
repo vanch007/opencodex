@@ -171,6 +171,8 @@ export interface AdapterRequest {
 }
 
 export interface AdapterFetchContext {
+  /** Executor invocation to response headers or rejection; excludes body streaming. */
+  onUpstreamTiming?: (sample: { durationMs: number; outcome: "headers" | "error" }) => void;
   /** Kiro may hand a pooled refusal to the outer account rotator before same-account retry. */
   kiroPreferAccountFailover?: boolean;
   /** Remains attached to the returned response body after the response headers arrive. */

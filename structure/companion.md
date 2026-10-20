@@ -43,6 +43,10 @@ The native panel uses its incomplete indicator; the widget's optional chart `inc
 adds a partial-data suffix to the existing chart caption. Missing optional fields remain compatible
 with old snapshots and timeline responses.
 
+The native timeline in `app/Sources/NativeTray/UsageSections.swift` isolates each bar/line mark in
+its own `ChartContent` type to bound Swift type-checking. It preserves bucket dates, nonnegative
+token values, series identity and colors in both chart styles.
+
 ## Totals, quotas and title
 
 `desktop/src-tauri/src/companion_usage.rs`, `gui/src/pages/tray-data.ts` and

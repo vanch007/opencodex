@@ -634,7 +634,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     }
     let accountCap: number | null | undefined;
     if (fields.maxConcurrentPerAccount !== undefined) {
-      if (provider !== "kiro" || kind !== "generic") return jsonResponse({ error: "maxConcurrentPerAccount is only supported for Kiro OAuth" }, 400);
+      if ((provider !== "kiro" && provider !== "google-antigravity") || kind !== "generic") return jsonResponse({ error: "maxConcurrentPerAccount is only supported for Kiro/Antigravity OAuth" }, 400);
       accountCap = fields.maxConcurrentPerAccount === null ? null : parseKiroAccountCap(fields.maxConcurrentPerAccount);
       if (accountCap === null && fields.maxConcurrentPerAccount !== null) return jsonResponse({ error: "maxConcurrentPerAccount must be an integer 1-100 or null" }, 400);
     }
@@ -775,7 +775,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         }
       }
       if (body.maxConcurrentPerAccount !== undefined) {
-        if (provider !== "kiro") return jsonResponse({ error: "maxConcurrentPerAccount is only supported for Kiro OAuth" }, 400);
+        if (provider !== "kiro" && provider !== "google-antigravity") return jsonResponse({ error: "maxConcurrentPerAccount is only supported for Kiro/Antigravity OAuth" }, 400);
         const cap = body.maxConcurrentPerAccount === null ? null : parseKiroAccountCap(body.maxConcurrentPerAccount);
         if (cap === null && body.maxConcurrentPerAccount !== null) return jsonResponse({ error: "maxConcurrentPerAccount must be an integer 1-100 or null" }, 400);
         if (cap === null) delete next.maxConcurrentPerAccount;

@@ -584,10 +584,12 @@ function pickGenericOAuthFailoverAccount(
   const ring = start >= 0 ? [...order.slice(start + 1), ...order.slice(0, start)] : order;
   let candidates = ring.filter(id => id !== failedAccountId && eligible.includes(id));
   if (candidates.length === 0) return null;
-  const cap = providerName === "kiro" ? config.providers?.kiro?.oauthAccountFailover?.maxConcurrentPerAccount : undefined;
+  const capacityProvider = providerName === "kiro" || providerName === "google-antigravity"
+    && (config.providers[providerName]?.oauthAccountFailover?.enabled ?? config.oauthAccountFailover?.enabled) === true;
+  const cap = capacityProvider ? config.providers[providerName]?.oauthAccountFailover?.maxConcurrentPerAccount : undefined;
   if (typeof cap === "number" && Number.isInteger(cap) && cap >= 1 && cap <= 100) {
-    const withRoom = candidates.filter(id => accountInFlight("kiro", id) < cap);
-    if (withRoom.length > 0) candidates = withRoom;
+    const withRoom = candidates.filter(id => accountInFlight(providerName, id) < cap);
+    if (withRoom.length > 0 || providerName === "google-antigravity") candidates = withRoom;
   }
   candidates = preferKiroModelSupport(providerName, candidates, requestedModelId, config);
   // The 429 path branches too. Leaving it on the quota ranking would make a configured

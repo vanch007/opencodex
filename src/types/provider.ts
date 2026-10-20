@@ -709,7 +709,7 @@ export interface OcxProviderConfig {
    * Reactive 429 rotation remains available even when proactive routing is disabled.
    */
   oauthAccountFailover?: {
-    /** Kiro OAuth only: active serving requests per account, 1..100. */
+    /** Kiro/Antigravity OAuth: active serving requests per account, 1..100. */
     maxConcurrentPerAccount?: number;
     enabled?: boolean;
     /**

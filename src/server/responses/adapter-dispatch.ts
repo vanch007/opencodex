@@ -1,3 +1,4 @@
+import { recordAttemptUpstreamTiming } from "../request-log-generation-window";
 import { deferPhysicalSendReporter } from "./deferred-send-reporter";
 import { spendLedgerStorageErrorResponse } from "./spend-storage-error";
 import { classifyAnthropic429 } from "../../oauth/anthropic-rate-limit-policy";
@@ -411,6 +412,7 @@ export async function prepareAdapterExchange(
           sendBudget: adapterDispatchBudget,
           onPhysicalSend: send => noteAdapterPhysicalSend(inputTokenEstimate, send),
           onRecoveryWithheld: noteAdapterRecoveryWithheld,
+          onUpstreamTiming: sample => recordAttemptUpstreamTiming(logCtx, sample),
           stream: parsed.stream,
           executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
             pacingSlotAcquired: true,
@@ -711,6 +713,7 @@ export async function prepareAdapterExchange(
                   chargeFastDowngradeWorkflowSend();
                 },
                 onRecoveryWithheld: noteAdapterRecoveryWithheld,
+                onUpstreamTiming: sample => recordAttemptUpstreamTiming(logCtx, sample),
                 stream: parsed.stream,
                 executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
                   pacingSlotAcquired: true,

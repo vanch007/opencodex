@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { createAdapterPhysicalSend } from "../../src/adapters/physical-send";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
@@ -146,5 +146,46 @@ describe("adapter physical inference admission", () => {
     expect(prepared).toBe(false);
     expect(sends).toBe(0);
     expect(budget.used).toBe(4);
+  });
+});
+
+describe("physical send timing", () => {
+  test("measures executor wait and leaves the streaming body untouched", async () => {
+    let now = 0;
+    const clock = spyOn(performance, "now").mockImplementation(() => now);
+    const samples: unknown[] = [];
+    const response = new Response("stream payload");
+    try {
+      const send = createAdapterPhysicalSend({ onUpstreamTiming: sample => samples.push(sample) },
+        (async () => { now += 80; return response; }) as typeof fetch);
+      const result = await send({ url, beforeDispatch: () => { now += 1000; }, dispatch: executor => executor(url) });
+      expect(result).toBe(response);
+      expect(result.bodyUsed).toBe(false);
+      expect(samples).toEqual([{ durationMs: 80, outcome: "headers" }]);
+    } finally { clock.mockRestore(); }
+  });
+  test("reports failed executor waits without replacing the original error", async () => {
+    const samples: Array<{ durationMs: number; outcome: string }> = [];
+    const error = new Error("fixture transport error");
+    const send = createAdapterPhysicalSend({ onUpstreamTiming: sample => samples.push(sample) },
+      (async () => { throw error; }) as unknown as typeof fetch);
+    await expect(send({ url, dispatch: executor => executor(url) })).rejects.toBe(error);
+    expect(samples).toHaveLength(1);
+    expect(samples[0]?.outcome).toBe("error");
+    expect(samples[0]?.durationMs).toBeGreaterThanOrEqual(0);
+  });
+  test("observer failures cannot retry or discard a successful response", async () => {
+    let sends = 0;
+    const response = new Response("ok");
+    const send = createAdapterPhysicalSend({ onUpstreamTiming: () => { throw new Error("observer"); } },
+      (async () => { sends++; return response; }) as typeof fetch);
+    expect(await send({ url, dispatch: executor => executor(url) })).toBe(response);
+    expect(sends).toBe(1);
+  });
+  test("no timing is invented when admission fails before execution", async () => {
+    const samples: unknown[] = [];
+    const send = createAdapterPhysicalSend({ onUpstreamTiming: sample => samples.push(sample) });
+    await expect(send({ url, beforeDispatch: () => { throw new Error("refused"); }, dispatch: executor => executor(url) })).rejects.toThrow("refused");
+    expect(samples).toEqual([]);
   });
 });

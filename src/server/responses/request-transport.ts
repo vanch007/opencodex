@@ -1,3 +1,4 @@
+import { antigravityAccountCap, reserveAntigravityAccount, antigravitySnapshotIsCurrent } from "../../oauth/antigravity-capacity";
 import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
 import { anthropicBillingPhysicalFetch } from "../../providers/anthropic-billing-ownership";
 import { rebindPhysicalSend } from "../../lib/request-execution-budget";
@@ -153,16 +154,18 @@ export async function prepareResponsesTransport(
     if (result.error) throw new Error("Invalid Anthropic model route configuration");
     return result.decision;
   };
+  const antigravityCap = antigravityAccountCap(config, route.providerName);
+  const antigravityLoadEnabled = antigravityCap !== undefined && options.accountLoad !== undefined;
   const rawKiroCap = route.providerName === "kiro" && route.provider.authMode === "oauth"
     ? config.providers.kiro?.oauthAccountFailover?.maxConcurrentPerAccount : undefined;
-  const kiroCap = typeof rawKiroCap === "number" && Number.isInteger(rawKiroCap)
-    && rawKiroCap >= 1 && rawKiroCap <= 100 ? rawKiroCap : undefined;
-  const kiroLoadEnabled = route.providerName === "kiro" && route.provider.authMode === "oauth"
-    && (kiroCap !== undefined || (config.pool?.kernel === true
+  const accountCap = typeof rawKiroCap === "number" && Number.isInteger(rawKiroCap)
+    && rawKiroCap >= 1 && rawKiroCap <= 100 ? rawKiroCap : antigravityCap;
+  const accountLoadEnabled = antigravityLoadEnabled || route.providerName === "kiro" && route.provider.authMode === "oauth"
+    && (accountCap !== undefined || (config.pool?.kernel === true
       && config.providers.kiro?.oauthAccountFailover?.strategy === "least-loaded"
       && isProactivePreferenceEnabled(config, "kiro", Date.now())));
   const capacityResponse = () => new Response(JSON.stringify({ error: {
-    type: "server_error", code: "account_capacity", message: "Kiro account capacity is temporarily full; retry shortly.",
+    type: "server_error", code: "account_capacity", message: `${route.providerName} account capacity is temporarily full; retry shortly.`,
   } }), { status: 503, headers: { "content-type": "application/json", "retry-after": "1" } });
 
 
@@ -213,6 +216,11 @@ export async function prepareResponsesTransport(
     proactive = false,
     anthropicReason?: AnthropicAccountSelectionReason,
   ): Promise<OAuthAccessSnapshot | null> => {
+    if (antigravityLoadEnabled) {
+      if (!antigravitySnapshotIsCurrent(candidate, oauthSelection, route.modelId)) return null;
+      servingOAuthSnapshot = candidate;
+      return candidate;
+    }
     const maxSelectionAttempts = 3;
     for (let attempt = 0; attempt < maxSelectionAttempts; attempt++) {
       requireAnthropicAdmission();
@@ -275,13 +283,13 @@ export async function prepareResponsesTransport(
     // Keyed on the account, not the selection revision: a selection that moved away and back
     // (A -> B -> A) before the 401 landed still serves the rejected credential, and skipping
     // the refresh would replay it and spend the one recovery attempt.
-    const candidate = current?.accountId === sent.accountId ? await forceRefreshOAuthAccessSnapshot(sent) : sent;
+    const candidate = (current?.accountId === sent.accountId || antigravityLoadEnabled) ? await forceRefreshOAuthAccessSnapshot(sent) : sent;
     const admitted = await commitResolvedOAuthSelection(candidate);
     if (!admitted) throw new Error("OAuth selection changed during credential recovery");
-    if (kiroLoadEnabled && options.accountLoad?.lease?.accountId !== admitted.accountId) {
+    if (accountLoadEnabled && options.accountLoad?.lease?.accountId !== admitted.accountId) {
       const signal = options.abortSignal ?? req.signal;
-      const replayLease = await acquireAccountLease("kiro", admitted.accountId, {
-        maxConcurrentPerAccount: kiroCap, signal,
+      const replayLease = await acquireAccountLease(route.providerName, admitted.accountId, {
+        maxConcurrentPerAccount: accountCap, signal,
       });
       if (!replayLease || !options.accountLoad || options.accountLoad.cancelled || signal.aborted) {
         replayLease?.release();
@@ -418,18 +426,18 @@ export async function prepareResponsesTransport(
     if (snapshot.provider !== route.providerName) return null;
     if (route.provider.googleMode === "cloud-code-assist" && !snapshot.projectId) return null;
     const signal = options.abortSignal ?? req.signal;
-    let speculative = kiroLoadEnabled && options.accountLoad?.lease?.accountId !== snapshot.accountId
-      ? await acquireAccountLease("kiro", snapshot.accountId, { maxConcurrentPerAccount: kiroCap, signal }) : null;
+    let speculative = accountLoadEnabled && options.accountLoad?.lease?.accountId !== snapshot.accountId
+      ? await acquireAccountLease(route.providerName, snapshot.accountId, { maxConcurrentPerAccount: accountCap, signal }) : null;
     if (speculative && (options.accountLoad?.cancelled || signal.aborted)) { speculative.release(); return null; }
-    if (kiroLoadEnabled && options.accountLoad?.lease?.accountId !== snapshot.accountId && !speculative) return null;
+    if (accountLoadEnabled && options.accountLoad?.lease?.accountId !== snapshot.accountId && !speculative) return null;
     let committed: OAuthAccessSnapshot | null;
     try { committed = await commitResolvedOAuthSelection(snapshot); }
     catch (error) { speculative?.release(); throw error; }
     if (!committed) { speculative?.release(); return null; }
     if (speculative && (options.accountLoad?.cancelled || signal.aborted)) { speculative.release(); return null; }
-    if (kiroLoadEnabled && committed.accountId !== (speculative?.accountId ?? options.accountLoad?.lease?.accountId)) {
+    if (accountLoadEnabled && committed.accountId !== (speculative?.accountId ?? options.accountLoad?.lease?.accountId)) {
       speculative?.release();
-      speculative = await acquireAccountLease("kiro", committed.accountId, { maxConcurrentPerAccount: kiroCap, signal });
+      speculative = await acquireAccountLease(route.providerName, committed.accountId, { maxConcurrentPerAccount: accountCap, signal });
       if (speculative && (options.accountLoad?.cancelled || signal.aborted)) { speculative.release(); return null; }
       if (!speculative) return null;
     }
@@ -514,6 +522,8 @@ export async function prepareResponsesTransport(
       anthropicRouteDecision = currentAnthropicRouteDecision();
       if (anthropicRouteDecision && !routeCandidates(anthropicRouting!.getEligibleAnthropicAccounts(Date.now(), route.modelId), anthropicRouteDecision).includes(binding.snapshot.accountId)) return false;
     }
+    if (antigravityLoadEnabled) return options.accountLoad?.lease?.accountId === binding.snapshot.accountId
+      && antigravitySnapshotIsCurrent(binding.snapshot, binding.selection, route.modelId);
     const selected = captureOAuthAccountSelection(route.providerName);
     const row = getAccountCredentialWithStatus(route.providerName, binding.snapshot.accountId);
     return selected?.accountId === binding.selection.accountId && selected?.revision === binding.selection.revision
@@ -821,9 +831,19 @@ export async function prepareResponsesTransport(
         // without quota evidence keeps the resolution it has today.
         const refusalAwareId = route.providerName === "kiro" && oauthSelection?.accountId
           ? refusalAwareInitialKiroAccount(config, oauthSelection.accountId, Date.now(), route.modelId) : null;
-        const preferredAccountId = refusalAwareId ?? (isGenericFailoverProvider(route.providerName, route.provider)
+        let preferredAccountId = refusalAwareId ?? (isGenericFailoverProvider(route.providerName, route.provider)
           ? preferredInitialAccount(config, route.providerName, Date.now(), route.modelId)
           : null);
+        if (antigravityLoadEnabled) {
+          const signal = options.abortSignal ?? req.signal;
+          options.accountLoad!.lease?.release();
+          options.accountLoad!.lease = null;
+          const lease = await reserveAntigravityAccount(config, preferredAccountId, route.modelId, signal);
+          if (!lease) return signal.aborted ? clientCancelledResponse() : capacityResponse();
+          if (options.accountLoad!.cancelled || signal.aborted) { lease.release(); return clientCancelledResponse(); }
+          options.accountLoad!.lease = lease;
+          preferredAccountId = lease.accountId;
+        }
         let safetyAlternateId: string | null = refusalAwareId;
         // Resolved account-scoped, NOT through failoverAccountSnapshot: that helper marks a
         // rotation site, and rotation sites must apply their credential through
@@ -887,10 +907,10 @@ export async function prepareResponsesTransport(
         if (!admitted) return formatErrorResponse(409, "conflict_error", "OAuth account selection changed; retry the request");
         if (safetyAlternateId && admitted.accountId !== safetyAlternateId)
           return formatErrorResponse(409, "conflict_error", "OAuth account selection changed; retry the request");
-        if (kiroLoadEnabled) {
+        if (accountLoadEnabled && !antigravityLoadEnabled) {
           const transportSignal = options.abortSignal ?? req.signal;
-          const lease = await acquireAccountLease("kiro", admitted.accountId, {
-            maxConcurrentPerAccount: kiroCap, waitMs: KIRO_ACCOUNT_WAIT_MS, signal: transportSignal,
+          const lease = await acquireAccountLease(route.providerName, admitted.accountId, {
+            maxConcurrentPerAccount: accountCap, waitMs: KIRO_ACCOUNT_WAIT_MS, signal: transportSignal,
           });
           if (!lease) return transportSignal.aborted
             ? clientCancelledResponse() : capacityResponse();

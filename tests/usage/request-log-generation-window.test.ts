@@ -10,7 +10,7 @@ import {
   inspectResponseLogSsePayload,
   type RequestLogContext,
 } from "../../src/server/request-log";
-import { generationWindowFields, recordGenerationEvent } from "../../src/server/request-log-generation-window";
+import { generationWindowFields, recordGenerationEvent, recordAttemptUpstreamTiming } from "../../src/server/request-log-generation-window";
 import { normalizeUsageEntryForTest, resetUsageReadCacheForTests, usageLogPath } from "../../src/usage/log";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -104,4 +104,21 @@ test("both live SSE taps feed the recorder", async () => {
   await new Response(tapAnthropicSseForLog(upstream, anthropic, () => {})).text();
   expect(anthropic.generationStartedAt).toBeNumber();
   expect(anthropic.lastOutputAt).toBeNumber();
+});
+
+test("physical timing aggregates retries and stays attached to its attempt", () => {
+  const log = ctx();
+  recordAttemptUpstreamTiming(log, { durationMs: 10, outcome: "headers" });
+  expect(log.activeAttempt).toBeUndefined();
+  log.activeAttempt = { ordinal: 1, provider: "google-antigravity", model: "m", adapter: "google",
+    status: 200, durationMs: 100, sendCount: 2, recoveryKinds: [], usageStatus: "reported" };
+  recordAttemptUpstreamTiming(log, { durationMs: 30, outcome: "error" });
+  recordAttemptUpstreamTiming(log, { durationMs: 50, outcome: "headers" });
+  recordAttemptUpstreamTiming(log, { durationMs: NaN, outcome: "headers" });
+  expect(log.activeAttempt.upstreamTiming).toEqual({ sends: 2, headers: 1, waitMs: 80 });
+  const normalized = normalizeUsageEntryForTest({ requestId: "timed", timestamp: Date.now(),
+    provider: "google-antigravity", model: "m", status: 200, durationMs: 100,
+    usageStatus: "reported", attempts: [log.activeAttempt] });
+  expect(normalized.attempts?.[0]?.upstreamTiming).toEqual({ sends: 2, headers: 1, waitMs: 80 });
+  expect(log.activeAttempt.sendCount).toBe(2);
 });

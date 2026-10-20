@@ -2,7 +2,7 @@
   "catalog-antigravity-summary.test.ts": "codex-integration",
   "codex-affinity-priority.test.ts": "codex-integration",
   "google-content-filter.test.ts": "adapters/google",
-  "antigravity-balance.test.ts": "oauth",
+  "antigravity-capacity.test.ts": "oauth", "antigravity-balance.test.ts": "oauth",
   "antigravity-reset-priority.test.ts": "oauth",
   "google-tool-progress.test.ts": "adapters/google",
   "codex-history-pending-wal.test.ts": "codex-integration",

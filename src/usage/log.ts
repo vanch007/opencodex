@@ -132,6 +132,8 @@ export function classifyCacheTelemetryProvenance(
 }
 
 export interface PersistedUsageAttempt {
+  /** Observed executor waits, including failures; absent for uninstrumented transports. */
+  upstreamTiming?: { sends: number; headers: number; waitMs: number };
   ordinal: number;
   provider: string;
   /** Absent on historic attempts and routes whose subscription attribution is unknown. */
@@ -691,6 +693,14 @@ function normalizeAttemptTierOutcome(raw: unknown): AttemptTierOutcome | null {
   };
 }
 
+function validUpstreamTiming(raw: unknown): raw is NonNullable<PersistedUsageAttempt["upstreamTiming"]> {
+  if (!raw || typeof raw !== "object") return false;
+  const v = raw as Record<string, unknown>;
+  return Number.isSafeInteger(v.sends) && (v.sends as number) > 0
+    && Number.isSafeInteger(v.headers) && (v.headers as number) >= 0
+    && (v.headers as number) <= (v.sends as number) && isNonNegativeFiniteNumber(v.waitMs);
+}
+
 function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const attempt = raw as Record<string, unknown>;
@@ -757,6 +767,10 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
     ...(isNonNegativeFiniteNumber(attempt.firstOutputMs)
       ? { firstOutputMs: attempt.firstOutputMs }
       : {}),
+    ...(validUpstreamTiming(attempt.upstreamTiming) ? { upstreamTiming: {
+      sends: attempt.upstreamTiming.sends, headers: attempt.upstreamTiming.headers,
+      waitMs: attempt.upstreamTiming.waitMs,
+    } } : {}),
     sendCount: attempt.sendCount as number,
     recoveryKinds,
     ...(recoveryWithheld.length ? { recoveryWithheld } : {}),

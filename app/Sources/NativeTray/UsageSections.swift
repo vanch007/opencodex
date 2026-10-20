@@ -61,13 +61,8 @@ struct NativeTrayChartView: View {
                     ForEach(chart.series) { series in
                         ForEach(Array(series.points.enumerated()), id: \.offset) { index, point in
                             let date = Date(timeIntervalSince1970: chart.start + Double(index) * chart.bucketSeconds)
-                            if style == "stackedBar" {
-                                BarMark(x: .value("Time", date), y: .value("Tokens", max(0, point)), stacking: .standard)
-                                    .foregroundStyle(by: .value("Series", series.id))
-                            } else {
-                                LineMark(x: .value("Time", date), y: .value("Tokens", max(0, point)), series: .value("Series", series.id))
-                                    .foregroundStyle(by: .value("Series", series.id))
-                            }
+                            NativeTrayUsageMark(date: date, tokens: max(0, point), seriesID: series.id,
+                                               stacked: style == "stackedBar")
                         }
                     }
                 }
@@ -106,6 +101,24 @@ struct NativeTrayChartView: View {
             if chart.incomplete {
                 Text("Some usage records are unavailable").font(.caption2).foregroundStyle(.secondary)
             }
+        }
+    }
+}
+
+// A separate content type bounds type-checking of the nested chart builders.
+private struct NativeTrayUsageMark: ChartContent {
+    let date: Date
+    let tokens: Double
+    let seriesID: String
+    let stacked: Bool
+
+    @ChartContentBuilder var body: some ChartContent {
+        if stacked {
+            BarMark(x: .value("Time", date), y: .value("Tokens", tokens), stacking: .standard)
+                .foregroundStyle(by: .value("Series", seriesID))
+        } else {
+            LineMark(x: .value("Time", date), y: .value("Tokens", tokens), series: .value("Series", seriesID))
+                .foregroundStyle(by: .value("Series", seriesID))
         }
     }
 }

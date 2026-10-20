@@ -74,7 +74,7 @@ function routedDisplayName(slug: string, model?: CatalogModel, config?: Pick<Ocx
   // Keep the picker compact for the locally configured third-party providers.
   // Preserve an explicit non-default Antigravity alias; only the built-in
   // compact alias is collapsed to the model name requested by this install.
-  if (provider === "xai") return modelId;
+  if (provider === "xai" || provider === "gemini-web") return modelId;
   if (provider === "google-antigravity") {
     if (model?.providerAlias === null) return slug;
     const alias = (typeof model?.providerAlias === "string" && model.providerAlias.trim().length > 0)
