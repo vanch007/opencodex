@@ -33,6 +33,7 @@ export const ATTEMPT_RECOVERY_KIND_ROSTER = Object.freeze([
   "anthropic-oauth-429",
   "oauth-account-429",
   "oauth-account-verification",
+  "oauth-account-402",
   "image-413",
   "console-go-upload-retry",
   "opaque-blob-rejection",

@@ -42,6 +42,8 @@ export function classifyModelFamilyForQuota(
   return undefined;
 }
 
+const windowMatchesFamily = antigravityWindowMatchesFamily;
+
 export function antigravityAccountWeeklyResetAt(accountId: string, requestedModelId?: string | null, now = Date.now()): number | null {
   return antigravityActiveWeeklyResetAt(getCachedProviderAccountQuota("google-antigravity", accountId),
     classifyModelFamilyForQuota("google-antigravity", requestedModelId), now);
@@ -100,7 +102,7 @@ function headroomOf(provider: string, accountId: string, requestedModelId?: stri
   if (provider === "google-antigravity") {
     const now = Date.now();
     const percents = (quota.customWindows ?? [])
-      .filter(window => !family || antigravityWindowMatchesFamily(window.label, family))
+      .filter(window => window.modelId === undefined && (!family || antigravityWindowMatchesFamily(window.label, family)))
       .filter(window => window.resetAt === undefined || (Number.isFinite(window.resetAt) && window.resetAt > now))
       .map(window => window.percent);
     if (!family || !quota.customWindows?.length) {
@@ -112,14 +114,14 @@ function headroomOf(provider: string, accountId: string, requestedModelId?: stri
         }
       }
     }
-    const valid = percents.filter(value => Number.isFinite(value) && value >= 0 && value <= 100);
+    const valid = percents.filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100);
     return valid.length ? 100 - Math.max(...valid) : null;
   }
   const percents = [
     quota.fiveHourPercent,
     quota.weeklyPercent,
     quota.monthlyPercent,
-    ...(quota.customWindows ?? []).map(window => window.percent),
+    ...(quota.customWindows ?? []).filter(window => window.modelId === undefined).map(window => window.percent),
   ].filter((value): value is number => typeof value === "number");
   if (percents.length === 0) return null;
   return 100 - Math.max(...percents);
@@ -154,6 +156,74 @@ export function isAccountQuotaExhausted(
 }
 
 /**
+ * Earliest future reset timestamp (in ms) for the relevant quota window, or null if unknown.
+ * Prefers weekly reset when multiple windows exist so expiring allowance is consumed first.
+ */
+export function accountResetTimestamp(
+  provider: string,
+  accountId: string,
+  requestedModelId?: string | null,
+  now = Date.now(),
+): number | null {
+  const quota = getCachedProviderAccountQuota(provider, accountId);
+  if (!quota) return null;
+  const family = classifyModelFamilyForQuota(provider, requestedModelId);
+  // Model-attributed rows are diagnostics; one must never become the account's reset time.
+  const windows = (quota.customWindows ?? []).filter(w => w.modelId === undefined && (!family || windowMatchesFamily(w.label, family)));
+  const weekly = windows.find(w => /week/i.test(w.label));
+  let rawReset = weekly?.resetAt ?? quota.weeklyResetAt;
+  if (rawReset === undefined && provider !== "google-antigravity" && provider !== "anthropic") {
+    // Providers without a weekly cadence: prefer an explicitly 5h-labeled window before
+    // falling back to first-window order.
+    const fiveHour = windows.find(w => /5h|five/i.test(w.label)) ?? windows[0];
+    rawReset = fiveHour?.resetAt ?? quota.fiveHourResetAt;
+  } else if (rawReset === undefined) {
+    rawReset = windows[0]?.resetAt ?? quota.fiveHourResetAt;
+  }
+  if (typeof rawReset !== "number" || !Number.isFinite(rawReset)) return null;
+  const ms = rawReset < 1e11 ? rawReset * 1000 : rawReset;
+  return ms > now ? ms : null;
+}
+
+/**
+ * Rank candidates by soonest reset timestamp first among healthy accounts.
+ * Accounts whose quota will reset earliest get priority so allowances do not expire unused.
+ *
+ * When a passive provider has incomplete quota evidence (some ring members with no
+ * cached record), reset timestamps are unreliable: an unknown account converts to
+ * Infinity and always loses to a known near-exhausted one. Fall back to headroom
+ * order instead of inventing a reset ordering.
+ */
+export function rankAccountsByResetFirst(
+  provider: string,
+  ring: readonly string[],
+  requestedModelId?: string | null,
+  now = Date.now(),
+  accounts?: ReadonlyMap<string, ProviderAccount>,
+): string[] {
+  if (ring.length < 2) return [...ring];
+  const ranked = rankAccountsByHeadroom(provider, ring, requestedModelId, accounts);
+  const healthy = ranked.filter(id => !isAccountQuotaExhausted(provider, id, requestedModelId, accounts?.get(id)));
+  if (healthy.length < 2) return ranked;
+  if (
+    hasPassiveAccountQuota(provider)
+    && !ring.every(id => headroomOf(provider, id, requestedModelId, accounts?.get(id)) !== null)
+  ) return ranked;
+
+  const withReset = healthy.map((id, index) => ({
+    id,
+    resetAt: accountResetTimestamp(provider, id, requestedModelId, now) ?? Number.POSITIVE_INFINITY,
+    headroom: headroomOf(provider, id, requestedModelId, accounts?.get(id)) ?? 0,
+    index,
+  }));
+
+  withReset.sort((a, b) => (a.resetAt - b.resetAt) || (b.headroom - a.headroom) || (a.index - b.index));
+  const sortedHealthy = withReset.map(r => r.id);
+  const exhausted = ranked.filter(id => isAccountQuotaExhausted(provider, id, requestedModelId, accounts?.get(id)));
+  return [...sortedHealthy, ...exhausted];
+}
+
+/**
  * Order candidates best-first.
  *
  * Returns the input untouched when no candidate has quota evidence, which keeps every
@@ -180,22 +250,19 @@ export function rankAccountsByHeadroom(
     const account = accounts?.get(id);
     const exhaustion = provider === "kiro" && account ? kiroAccountEvidence(account).exhausted : undefined;
     const headroom = headroomOf(provider, id, requestedModelId, account);
-    const weeklyResetAt = provider === "google-antigravity" ? antigravityAccountWeeklyResetAt(id, requestedModelId) : null;
-    if (exhaustion !== undefined || headroom !== null || weeklyResetAt !== null) sawEvidence = true;
+    if (exhaustion !== undefined || headroom !== null) sawEvidence = true;
 
     if (isAccountQuotaExhausted(provider, id, requestedModelId, account)
       || (provider === "kiro" && exhaustion === undefined && headroom !== null && headroom <= 0))
       return { id, bucket: RANK_EXHAUSTED, headroom: 0, index };
-    if (headroom === null && weeklyResetAt === null) return { id, bucket: RANK_UNKNOWN, headroom: 0, index };
-    return { id, bucket: RANK_HEALTHY, headroom: headroom ?? 0, index, weeklyResetAt: weeklyResetAt ?? undefined };
+    if (headroom === null) return { id, bucket: RANK_UNKNOWN, headroom: 0, index };
+    return { id, bucket: RANK_HEALTHY, headroom, index };
   });
 
   if (!sawEvidence) return [...ring];
 
   return ranked
-    .sort((a, b) => (a.bucket - b.bucket)
-      || ((a.weeklyResetAt ?? Infinity) - (b.weeklyResetAt ?? Infinity))
-      || (b.headroom - a.headroom) || (a.index - b.index))
+    .sort((a, b) => (a.bucket - b.bucket) || (b.headroom - a.headroom) || (a.index - b.index))
     .map(entry => entry.id);
 }
 
@@ -227,7 +294,6 @@ export function hasHeadroomEvidence(
   }
   return ids.some(id =>
     headroomOf(provider, id, requestedModelId, accounts?.get(id)) !== null
-    || (provider === "google-antigravity" && antigravityAccountWeeklyResetAt(id, requestedModelId) !== null)
     || (provider === "kiro" && accounts?.get(id) !== undefined
       && kiroAccountEvidence(accounts.get(id)!).exhausted !== undefined));
 }
