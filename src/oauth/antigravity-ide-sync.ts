@@ -190,6 +190,20 @@ export function createUnifiedTopicEntry(sentinelKey: string, payload: Uint8Array
   return encodeLenDelimField(1, entry);
 }
 
+/**
+ * Encodes a unified topic entry where Row.value (field 1) is a raw UTF-8 string
+ * rather than Base64-encoded protobuf bytes. Used by Antigravity IDE 2.6.0's
+ * `authStateWithContextSentinelKey` (`Gka(e, t)` in `antigravityAuthMainService.js`).
+ */
+export function createUnifiedTopicRawStringEntry(sentinelKey: string, rawString: string): Uint8Array {
+  const row = encodeStringField(1, rawString);
+  const entry = concatArrays(
+    encodeStringField(1, sentinelKey),
+    encodeLenDelimField(2, row),
+  );
+  return encodeLenDelimField(1, entry);
+}
+
 export function createMinimalUserStatusPayload(email: string): Uint8Array {
   return concatArrays(
     encodeStringField(3, email),
@@ -197,7 +211,111 @@ export function createMinimalUserStatusPayload(email: string): Uint8Array {
   );
 }
 
+export function createSignedInAuthStateJson(): string {
+  return JSON.stringify({
+    state: "signedIn",
+    context: {
+      project: "",
+      showProjectError: false,
+      errorMessage: "",
+      ineligibleMessage: "",
+      verificationUrl: "",
+      isGcpTos: false,
+      browserOpenFailed: false,
+      appealUrl: "",
+      appealLinkText: "",
+    },
+  });
+}
+
+// ======================== System Credential Store (agy --hub) ========================
+
+const KEYRING_SERVICE = "gemini";
+const KEYRING_ACCOUNT = "antigravity";
+
+export function formatAntigravityKeyringPayload(credentials: {
+  access: string;
+  refresh: string;
+  expires: number;
+  email?: string;
+}): string {
+  const expiryIso = new Date(credentials.expires).toISOString();
+  const payload = {
+    token: {
+      access_token: credentials.access,
+      token_type: "Bearer",
+      refresh_token: credentials.refresh,
+      expiry: expiryIso,
+    },
+    auth_method: "consumer",
+    id_token_email: credentials.email?.trim() ?? "",
+  };
+  const b64 = Buffer.from(JSON.stringify(payload), "utf-8").toString("base64");
+  return `go-keyring-base64:${b64}`;
+}
+
+/**
+ * Writes credentials to Antigravity 2.2+ system credential store (macOS Keychain
+ * `service=gemini, account=antigravity`) so `agy --hub` recognizes the switched
+ * account immediately without prompting to log in.
+ */
+export async function writeAntigravitySystemCredential(credentials: {
+  access: string;
+  refresh: string;
+  expires: number;
+  email?: string;
+}): Promise<{ success: boolean; error?: string }> {
+  try {
+    const currentPlatform = platform();
+    const keyringVal = formatAntigravityKeyringPayload(credentials);
+
+    if (currentPlatform === "darwin") {
+      try {
+        const delProc = Bun.spawn(
+          ["security", "delete-generic-password", "-s", KEYRING_SERVICE, "-a", KEYRING_ACCOUNT],
+          { stdout: "ignore", stderr: "ignore" }
+        );
+        await delProc.exited;
+      } catch {}
+
+      const addProc = Bun.spawn(
+        [
+          "security",
+          "add-generic-password",
+          "-U",
+          "-s",
+          KEYRING_SERVICE,
+          "-a",
+          KEYRING_ACCOUNT,
+          "-w",
+          keyringVal,
+          "-A",
+        ],
+        { stdout: "ignore", stderr: "pipe" }
+      );
+      const exitCode = await addProc.exited;
+      if (exitCode !== 0) {
+        const errText = await new Response(addProc.stderr).text();
+        return { success: false, error: `Keychain write failed (${exitCode}): ${errText.trim()}` };
+      }
+    }
+
+    return { success: true };
+  } catch (err: unknown) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 // ======================== Database Operations ========================
+
+function isConsumerGoogleAccountEmail(email?: string): boolean {
+  if (!email) return true;
+  const domain = email.trim().toLowerCase().split("@")[1];
+  return !domain || domain === "gmail.com" || domain === "googlemail.com";
+}
 
 export function injectAntigravityAccountToDb(credentials: {
   access: string;
@@ -222,7 +340,8 @@ export function injectAntigravityAccountToDb(credentials: {
     let baseTopic: Uint8Array = new Uint8Array(0);
     if (row?.value) {
       const existing = new Uint8Array(Buffer.from(row.value, "base64"));
-      baseTopic = removeUnifiedTopicEntry(existing, "oauthTokenInfoSentinelKey");
+      const withoutToken = removeUnifiedTopicEntry(existing, "oauthTokenInfoSentinelKey");
+      baseTopic = removeUnifiedTopicEntry(withoutToken, "authStateWithContextSentinelKey");
     }
 
     const expirySeconds = Math.floor(credentials.expires / 1000);
@@ -233,8 +352,12 @@ export function injectAntigravityAccountToDb(credentials: {
       false,
       credentials.idToken
     );
+    const authStateEntry = createUnifiedTopicRawStringEntry(
+      "authStateWithContextSentinelKey",
+      createSignedInAuthStateJson()
+    );
     const newEntry = createUnifiedTopicEntry("oauthTokenInfoSentinelKey", oauthInfoBytes);
-    const fullTopic = concatArrays(baseTopic, newEntry);
+    const fullTopic = concatArrays(baseTopic, authStateEntry, newEntry);
     const topicB64 = Buffer.from(fullTopic).toString("base64");
 
     db.query("INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)")
@@ -251,7 +374,13 @@ export function injectAntigravityAccountToDb(credentials: {
         .run("antigravityUnifiedStateSync.userStatus", statusB64);
     }
 
-    // 3. Set onboarding completed flag
+    // 3. Clear enterprisePreferences for consumer Google accounts
+    if (isConsumerGoogleAccountEmail(credentials.email)) {
+      db.query("DELETE FROM ItemTable WHERE key = 'antigravityUnifiedStateSync.enterprisePreferences'")
+        .run();
+    }
+
+    // 4. Set onboarding completed flag
     db.query("INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)")
       .run("antigravityOnboarding", "true");
 
@@ -266,17 +395,49 @@ export function injectAntigravityAccountToDb(credentials: {
 // ======================== Process Management ========================
 
 /**
+ * Finds the main Electron PIDs of Antigravity IDE on macOS via `ps -ax -o pid=,command=`.
+ * (`pgrep -f` on macOS does not reliably match Electron binaries whose `p_comm` is `Electron`).
+ */
+export async function findAntigravityIdePids(): Promise<number[]> {
+  const currentPlatform = platform();
+  if (currentPlatform !== "darwin") return [];
+  try {
+    const proc = Bun.spawn(["ps", "-ax", "-o", "pid=,command="], {
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    const output = await new Response(proc.stdout).text();
+    await proc.exited;
+    const pids: number[] = [];
+    for (const line of output.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      if (
+        (trimmed.includes("/Antigravity IDE.app/Contents/MacOS/Electron") ||
+          trimmed.includes("/Antigravity.app/Contents/MacOS/Electron")) &&
+        !trimmed.includes("--type=")
+      ) {
+        const match = trimmed.match(/^(\d+)\s+/);
+        if (match) {
+          const pid = Number.parseInt(match[1], 10);
+          if (Number.isFinite(pid) && pid > 0) pids.push(pid);
+        }
+      }
+    }
+    return pids;
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Checks if Antigravity IDE application is currently running.
  */
 export async function isAntigravityIdeRunning(): Promise<boolean> {
   const currentPlatform = platform();
   if (currentPlatform === "darwin") {
-    const proc = Bun.spawn(["pgrep", "-f", "Antigravity IDE.app/Contents/MacOS/Electron"], {
-      stdout: "pipe",
-      stderr: "ignore",
-    });
-    const code = await proc.exited;
-    return code === 0;
+    const pids = await findAntigravityIdePids();
+    return pids.length > 0;
   }
   if (currentPlatform === "win32") {
     const proc = Bun.spawn(["tasklist", "/FI", "IMAGENAME eq Antigravity IDE.exe"], {
@@ -299,17 +460,10 @@ export async function isAntigravityIdeRunning(): Promise<boolean> {
 export async function requestAntigravityQuit(): Promise<void> {
   const currentPlatform = platform();
   if (currentPlatform === "darwin") {
-    try {
-      const proc = Bun.spawn(["osascript", "-e", 'quit app "Antigravity IDE"'], {
-        stdout: "ignore",
-        stderr: "ignore",
-      });
-      await proc.exited;
-    } catch {
-      // Fallback to pkill if AppleScript fails
+    const pids = await findAntigravityIdePids();
+    for (const pid of pids) {
       try {
-        const killProc = Bun.spawn(["pkill", "-TERM", "-f", "Antigravity IDE.app/Contents/MacOS/Electron"]);
-        await killProc.exited;
+        process.kill(pid, "SIGTERM");
       } catch {}
     }
     return;
@@ -343,28 +497,55 @@ export function launchAntigravityIde(): void {
   }
 }
 
+function isTestEnvironment(): boolean {
+  if (process.env.NODE_ENV === "test") return true;
+  if (typeof Bun !== "undefined" && /\.test\.[jt]sx?$/.test(Bun.main ?? "")) return true;
+  const ocxHome = process.env.OPENCODEX_HOME;
+  if (ocxHome && !ocxHome.startsWith(homedir())) return true;
+  return false;
+}
+
 /**
- * High-level helper: Sync an account to Antigravity IDE.
- * If IDE is running and restartIfRunning is true, gracefully exits, injects DB, and relaunches.
+ * High-level helper: Sync an account to Antigravity IDE (both Keychain/credential-user-scope
+ * for `agy --hub` and `state.vscdb` for Electron Main).
+ * If IDE is running and restartIfRunning is true, gracefully exits, injects DB + Keychain, and relaunches.
  */
 export async function syncAntigravityAccountToIde(
   credentials: OAuthCredentials,
-  options: { restartIfRunning?: boolean } = {}
+  options: { restartIfRunning?: boolean; skipRefresh?: boolean; allowInTests?: boolean } = {}
 ): Promise<{
   success: boolean;
   ideInjected: boolean;
   ideRunning: boolean;
   ideRestarted: boolean;
+  refreshedCredential?: OAuthCredentials;
   message: string;
 }> {
-  let targetCreds = credentials;
+  if (isTestEnvironment() && !options.allowInTests) {
+    return {
+      success: true,
+      ideInjected: false,
+      ideRunning: false,
+      ideRestarted: false,
+      message: "Skipped IDE sync in test environment",
+    };
+  }
 
-  // 1. Ensure token is fresh if expiring in under 5 minutes
-  const fiveMinutesMs = 5 * 60 * 1000;
-  if (targetCreds.refresh && targetCreds.expires - Date.now() < fiveMinutesMs) {
+  let targetCreds = credentials;
+  let refreshedCredential: OAuthCredentials | undefined;
+
+  // 1. Always refresh token before writing into Antigravity IDE so both Keychain and state.vscdb
+  // receive a fresh, valid access_token with full expiry TTL.
+  if (targetCreds.refresh && !options.skipRefresh) {
     try {
       const fresh = await refreshAntigravityToken(targetCreds.refresh);
-      targetCreds = { ...targetCreds, ...fresh };
+      targetCreds = {
+        ...targetCreds,
+        access: fresh.access,
+        refresh: fresh.refresh || targetCreds.refresh,
+        expires: fresh.expires,
+      };
+      refreshedCredential = targetCreds;
     } catch {
       // Continue with current credentials if refresh fails
     }
@@ -382,16 +563,27 @@ export async function syncAntigravityAccountToIde(
       if (!(await isAntigravityIdeRunning())) break;
       await Bun.sleep(250);
     }
-    // If still running after timeout, send SIGTERM
+    // If still running after timeout, force terminate remaining PIDs
     if (await isAntigravityIdeRunning()) {
-      try {
-        Bun.spawn(["pkill", "-TERM", "-f", "Antigravity IDE.app/Contents/MacOS/Electron"]);
-        await Bun.sleep(500);
-      } catch {}
+      const remainingPids = await findAntigravityIdePids();
+      for (const pid of remainingPids) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {}
+      }
+      await Bun.sleep(400);
     }
   }
 
-  // Inject into database
+  // 2. Write to system credential store (macOS Keychain + credential-user-scope for agy --hub)
+  await writeAntigravitySystemCredential({
+    access: targetCreds.access,
+    refresh: targetCreds.refresh,
+    expires: targetCreds.expires,
+    email: targetCreds.email,
+  });
+
+  // 3. Inject into state.vscdb SQLite database (for Electron Main process)
   const injectResult = injectAntigravityAccountToDb({
     access: targetCreds.access,
     refresh: targetCreds.refresh,
@@ -405,13 +597,13 @@ export async function syncAntigravityAccountToIde(
       ideInjected: false,
       ideRunning: isRunning,
       ideRestarted: false,
+      ...(refreshedCredential ? { refreshedCredential } : {}),
       message: injectResult.error || "Failed to inject token into Antigravity IDE",
     };
   }
 
-  // Relaunch if it was running
+  // 4. Relaunch if it was running
   if (isRunning && restartIfRunning) {
-    // Wait a brief moment to make sure file handles are settled
     await Bun.sleep(300);
     launchAntigravityIde();
     ideRestarted = true;
@@ -422,8 +614,9 @@ export async function syncAntigravityAccountToIde(
     ideInjected: true,
     ideRunning: isRunning,
     ideRestarted,
+    ...(refreshedCredential ? { refreshedCredential } : {}),
     message: ideRestarted
-      ? `已同步账号 ${targetCreds.email ?? ""} 并重启 Antigravity IDE`
-      : `已同步账号 ${targetCreds.email ?? ""} 到 Antigravity IDE 状态库`,
+      ? `已同步账号 ${targetCreds.email ?? ""} 到 Keychain 与状态库，并重启 Antigravity IDE`
+      : `已同步账号 ${targetCreds.email ?? ""} 到 Keychain 与 Antigravity IDE 状态库`,
   };
 }

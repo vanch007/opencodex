@@ -553,6 +553,57 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       ? readPassiveProviderAccountQuotas(provider)
       : await fetchProviderAccountQuotas(provider, forceRefresh, quotaProvider, config);
     const byId = new Map(rows.map(row => [row.accountId, row]));
+
+    // Auto-switch Antigravity active account on quota exhaustion / threshold breach when
+    // proactive failover is enabled on google-antigravity.
+    if (
+      provider === "google-antigravity"
+      && wantQuota
+      && config.providers["google-antigravity"]?.oauthAccountFailover?.enabled === true
+    ) {
+      const set = getAccountSet("google-antigravity");
+      const activeId = set?.activeAccountId;
+      if (set && activeId && set.accounts.length > 1) {
+        const { accountHeadroomPercent, rankAccountsByHeadroom } = await import("../../oauth/account-quota-rank");
+        const threshold = config.providers["google-antigravity"]?.oauthAccountFailover?.autoSwitchThreshold ?? 80;
+        const minHeadroom = Math.max(0, 100 - threshold);
+        const activeAccount = set.accounts.find(a => a.id === activeId);
+        const activeRow = byId.get(activeId);
+        const activeHeadroom = accountHeadroomPercent("google-antigravity", activeId);
+        const shouldSwitch = Boolean(
+          activeAccount?.paused
+          || activeAccount?.needsReauth
+          || activeRow?.unavailable
+          || (activeHeadroom !== null && activeHeadroom <= minHeadroom)
+        );
+        if (shouldSwitch) {
+          const candidates = set.accounts
+            .filter(a => a.id !== activeId && !a.paused && !a.needsReauth && !byId.get(a.id)?.unavailable)
+            .filter(a => {
+              const headroom = accountHeadroomPercent("google-antigravity", a.id);
+              return headroom !== null && headroom > minHeadroom;
+            })
+            .map(a => a.id);
+          if (candidates.length > 0) {
+            const ranked = rankAccountsByHeadroom("google-antigravity", candidates);
+            const bestId = ranked[0];
+            const bestAccount = bestId ? set.accounts.find(a => a.id === bestId) : undefined;
+            if (bestId && bestAccount) {
+              const { setActiveAccount } = await import("../../oauth/store");
+              if (await setActiveAccount("google-antigravity", bestId)) {
+                const { forgetGenericFailoverRoster } = await import("../../oauth/generic-account-failover");
+                const { genericPoolKey, seedPoolRotationAccount } = await import("../../oauth/pool-kernel");
+                forgetGenericFailoverRoster("google-antigravity");
+                seedPoolRotationAccount(genericPoolKey("google-antigravity"), bestId);
+                const { syncAntigravityAccountToIde } = await import("../../oauth/antigravity-ide-sync");
+                void syncAntigravityAccountToIde(bestAccount.credential, { restartIfRunning: false }).catch(() => {});
+              }
+            }
+          }
+        }
+      }
+    }
+
     const projected = projectAccounts();
     return jsonResponse({
       ...(provider === "anthropic2" ? { provider } : {}), activeAccountId: projected.activeAccountId,
@@ -578,7 +629,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     if (provider === "anthropic2" && !configuredAnthropicInstance(config, provider)) return jsonResponse({ error: "Anthropic pool instance is not configured" }, 409);
     if (!body.accountId) return jsonResponse({ error: "missing accountId" }, 400);
-    const { getAccountCredentialWithStatus, setActiveAccount } = await import("../../oauth/store");
+    const { getAccountCredentialWithStatus, mergeAccountCredential, setActiveAccount } = await import("../../oauth/store");
     const current = getAccountCredentialWithStatus(provider, body.accountId);
     if (!current) return jsonResponse({ error: "account not found" }, 404);
     if (current.paused) return jsonResponse({ error: "account is paused" }, 409);
@@ -609,10 +660,15 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (provider === "google-antigravity") {
       const { syncAntigravityAccountToIde } = await import("../../oauth/antigravity-ide-sync");
       const restartIfRunning = (body as { restartIde?: boolean }).restartIde !== false;
-      ideSync = await syncAntigravityAccountToIde(current.credential, { restartIfRunning }).catch(err => ({
+      const syncOutcome = await syncAntigravityAccountToIde(current.credential, { restartIfRunning }).catch(err => ({
         success: false,
+        refreshedCredential: undefined,
         message: err instanceof Error ? err.message : String(err),
       }));
+      if (syncOutcome.refreshedCredential) {
+        await mergeAccountCredential("google-antigravity", body.accountId, syncOutcome.refreshedCredential).catch(() => {});
+      }
+      ideSync = syncOutcome;
     }
 
     return jsonResponse({ ok: true, provider, activeAccountId: body.accountId, ...(ideSync ? { ideSync } : {}) });

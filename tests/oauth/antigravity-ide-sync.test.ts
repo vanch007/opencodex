@@ -4,10 +4,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  createOAuthInfo,
-  createUnifiedTopicEntry,
-  removeUnifiedTopicEntry,
   createMinimalUserStatusPayload,
+  createOAuthInfo,
+  createSignedInAuthStateJson,
+  createUnifiedTopicEntry,
+  createUnifiedTopicRawStringEntry,
+  formatAntigravityKeyringPayload,
+  removeUnifiedTopicEntry,
 } from "../../src/oauth/antigravity-ide-sync";
 
 describe("Antigravity IDE protobuf serialization & sync", () => {
@@ -29,6 +32,34 @@ describe("Antigravity IDE protobuf serialization & sync", () => {
     // Remove key2 from stripped
     const stripped2 = removeUnifiedTopicEntry(stripped1, "key2");
     expect(stripped2.length).toBe(0);
+  });
+
+  test("creates raw-string unified topic entry for authStateWithContextSentinelKey", () => {
+    const authJson = createSignedInAuthStateJson();
+    const rawEntry = createUnifiedTopicRawStringEntry("authStateWithContextSentinelKey", authJson);
+    const decoded = new TextDecoder().decode(rawEntry);
+    expect(decoded).toContain("authStateWithContextSentinelKey");
+    expect(decoded).toContain('"state":"signedIn"');
+
+    const stripped = removeUnifiedTopicEntry(rawEntry, "authStateWithContextSentinelKey");
+    expect(stripped.length).toBe(0);
+  });
+
+  test("formats keyring payload for agy --hub", () => {
+    const keyringStr = formatAntigravityKeyringPayload({
+      access: "ya29.test_access",
+      refresh: "1//06_test_refresh",
+      expires: 1800000000000,
+      email: "User.Name@Gmail.com",
+    });
+    expect(keyringStr.startsWith("go-keyring-base64:")).toBe(true);
+    const jsonPart = Buffer.from(keyringStr.slice("go-keyring-base64:".length), "base64").toString("utf-8");
+    const parsed = JSON.parse(jsonPart);
+    expect(parsed.token.access_token).toBe("ya29.test_access");
+    expect(parsed.token.refresh_token).toBe("1//06_test_refresh");
+    expect(parsed.token.token_type).toBe("Bearer");
+    expect(parsed.auth_method).toBe("consumer");
+    expect(parsed.id_token_email).toBe("User.Name@Gmail.com");
   });
 
   test("creates valid oauth info protobuf message", () => {
