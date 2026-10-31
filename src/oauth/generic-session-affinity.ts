@@ -6,7 +6,7 @@ import type { OcxConfig } from "../types";
 import { classifyModelFamilyForQuota } from "./account-quota-rank";
 import { eligibleFailoverAccounts, isGenericFailoverProvider, preferKiroModelSupport, preferredInitialAccount } from "./generic-account-failover";
 import type { OAuthAccessSnapshot } from "./index";
-import { captureOAuthAccountSelection, credentialGeneration, getAccountCredentialWithStatus } from "./store";
+import { captureOAuthAccountSelection, credentialGeneration, getAccountCredentialWithStatus, getAccountSet } from "./store";
 import type { OAuthAccountSelection } from "./types";
 
 const IDLE_TTL_MS = 24 * 60 * 60_000;
@@ -68,11 +68,54 @@ function readBinding(config: OcxConfig, provider: string, id: string, model: str
   return bound.accountId;
 }
 
+/** Resolve an explicit route from caller identity (Codex account ID/email) to target account ID. */
+export function resolveExplicitCodexAccountRoute(
+  config: OcxConfig,
+  provider: string,
+  callerIdentity?: string | null,
+): string | null {
+  if (!callerIdentity) return null;
+  const routes = config.providers[provider]?.oauthAccountFailover?.codexAccountRoutes;
+  if (!routes || typeof routes !== "object") return null;
+
+  const candidateKeys = [callerIdentity, callerIdentity.toLowerCase()];
+  const chatgptAccounts = getAccountSet("chatgpt")?.accounts ?? [];
+  const matchedChatgpt = chatgptAccounts.find(a =>
+    a.id === callerIdentity || a.credential?.accountId === callerIdentity || a.credential?.email?.toLowerCase() === callerIdentity.toLowerCase()
+  );
+  if (matchedChatgpt?.credential?.email) {
+    candidateKeys.push(matchedChatgpt.credential.email, matchedChatgpt.credential.email.toLowerCase());
+  }
+  if (matchedChatgpt?.credential?.accountId) {
+    candidateKeys.push(matchedChatgpt.credential.accountId, matchedChatgpt.credential.accountId.toLowerCase());
+  }
+
+  let target: string | undefined;
+  for (const k of candidateKeys) {
+    if (routes[k]) {
+      target = routes[k];
+      break;
+    }
+  }
+  if (!target) return null;
+  const set = getAccountSet(provider);
+  if (!set) return null;
+  const direct = set.accounts.find(a => a.id === target);
+  if (direct && direct.paused !== true && direct.needsReauth !== true) return direct.id;
+  const byEmail = set.accounts.find(a => a.credential?.email?.toLowerCase() === target!.toLowerCase());
+  if (byEmail && byEmail.paused !== true && byEmail.needsReauth !== true) return byEmail.id;
+  const byAlias = set.accounts.find(a => (a as { alias?: string }).alias?.toLowerCase() === target!.toLowerCase());
+  if (byAlias && byAlias.paused !== true && byAlias.needsReauth !== true) return byAlias.id;
+  return null;
+}
+
 /** New sessions use the configured strategy; an ineligible active account cannot defeat release. */
 export function preferredGenericSessionAccount(
-  config: OcxConfig, provider: string, session: string | null, model?: string | null, now = Date.now(),
+  config: OcxConfig, provider: string, session: string | null, model?: string | null, now = Date.now(), callerIdentity?: string | null,
 ): string | null {
   if (!genericSessionAffinityEnabled(config, provider)) return null;
+  const explicit = resolveExplicitCodexAccountRoute(config, provider, callerIdentity);
+  if (explicit && genericSessionAccountEligible(config, provider, explicit, model, now)) return explicit;
   const bound = genericSessionAccount(config, provider, session, model, now);
   if (bound) return bound;
   const cursor = readBinding(config, provider, cursorKey(provider), model, now);

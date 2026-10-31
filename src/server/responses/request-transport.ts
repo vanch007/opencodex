@@ -86,7 +86,7 @@ import { selectProactiveApiKeyTransport } from "../../providers/key-failover";
 import { distributedKeyPhysicalFetch } from "../../providers/api-key-response-ownership";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { providerConsumesCallerAuthorization } from "../../providers/caller-authorization";
-import { releaseCodexAuthContextProbeLease, stripCodexRuntimeProviderFields } from "../../codex/auth-context";
+import { callerCodexWorkspaceAccountId, releaseCodexAuthContextProbeLease, stripCodexRuntimeProviderFields } from "../../codex/auth-context";
 import {
   beginRequestAttempt,
   sealRequestAttemptIdentity,
@@ -127,6 +127,7 @@ export async function prepareResponsesTransport(
   const { config, logCtx, options, req } = requestContext;
   const { route, parsed, inboundWire, translatorBudget } = requestState;
   const genericAffinityMode = genericSessionAffinityEnabled(config, route.providerName);
+  const callerCodexAccount = callerCodexWorkspaceAccountId(req.headers);
   const anthropicInstance = route.provider.authMode === "oauth"
     ? configuredAnthropicInstance(config, route.providerName) : undefined;
   // Refuse custom/orphan B OAuth before any generic resolver can observe its auth row.
@@ -288,7 +289,7 @@ export async function prepareResponsesTransport(
       if (revisedAnthropic) anthropicReason = revisedAnthropic.reason;
       const genericAccountId = genericAffinityMode && !selectionChanged
         ? (genericSessionAccountEligible(config, route.providerName, candidate.accountId, route.modelId, Date.now(), true)
-          ? candidate.accountId : (preferredGenericSessionAccount(config, route.providerName, genericSessionKey, route.modelId)
+          ? candidate.accountId : (preferredGenericSessionAccount(config, route.providerName, genericSessionKey, route.modelId, Date.now(), callerCodexAccount)
             ?? oauthSelection.accountId))
         : oauthSelection.accountId;
       if (!genericAccountId && !anthropicInstance) return null;
@@ -635,7 +636,7 @@ export async function prepareResponsesTransport(
       }
       if (genericAffinityMode
         && (!candidate || !genericSessionAccountEligible(config, route.providerName, candidate.accountId, route.modelId, Date.now(), true))) {
-        const accountId = preferredGenericSessionAccount(config, route.providerName, genericSessionKey, route.modelId)
+        const accountId = preferredGenericSessionAccount(config, route.providerName, genericSessionKey, route.modelId, Date.now(), callerCodexAccount)
           ?? captureOAuthAccountSelection(route.providerName)?.accountId;
         candidate = accountId ? await getValidAccessSnapshotForAccount(route.providerName, accountId, { requireUsableAccount: true }) : undefined;
       }
@@ -891,8 +892,11 @@ export async function prepareResponsesTransport(
     })
     : null;
   const anthropicSessionKey = anthropicInstance ? oauthSessionKey : null;
+  const genericPrincipal = callerCodexAccount
+    ? `codex:${callerCodexAccount}`
+    : (resolveContextPrincipal(req, config, options.admission) ?? "loopback");
   const genericSessionKey = genericAffinityMode && oauthSessionKey
-    ? JSON.stringify([resolveContextPrincipal(req, config, options.admission) ?? "loopback", oauthSessionKey]) : null;
+    ? JSON.stringify([genericPrincipal, oauthSessionKey]) : null;
   if (route.provider.authMode === "oauth") {
     try {
       if (anthropicInstance !== undefined && anthropicRouting!.isAnthropicAccountPoolEnabled(config)) {
@@ -927,33 +931,34 @@ export async function prepareResponsesTransport(
           ? refusalAwareInitialKiroAccount(config, oauthSelection.accountId, Date.now(), route.modelId) : null;
         const affinityAccountId = genericSessionAccount(config, route.providerName, genericSessionKey, route.modelId);
         const proposedAccountId = affinityAccountId
-          ?? preferredGenericSessionAccount(config, route.providerName, genericSessionKey, route.modelId)
+          ?? preferredGenericSessionAccount(config, route.providerName, genericSessionKey, route.modelId, Date.now(), callerCodexAccount)
           ?? refusalAwareId ?? (isGenericFailoverProvider(route.providerName, route.provider)
           ? preferredInitialAccount(config, route.providerName, Date.now(), route.modelId)
           : null);
         // An unchanged active choice must retain the ordinary resolver's terminal-refresh
         // recovery (not the speculative-preference fallback that resolves the same dead grant).
-        let preferredAccountId = genericAffinityMode && proposedAccountId === oauthSelection?.accountId
+        const preferredAccountId = genericAffinityMode && proposedAccountId === oauthSelection?.accountId
           ? null : proposedAccountId;
+        let effectivePreferredAccountId = preferredAccountId;
         if (antigravityLoadEnabled) {
           const signal = options.abortSignal ?? req.signal;
           options.accountLoad!.lease?.release();
           options.accountLoad!.lease = null;
-          const lease = await reserveAntigravityAccount(config, preferredAccountId, route.modelId, signal);
+          const lease = await reserveAntigravityAccount(config, effectivePreferredAccountId, route.modelId, signal);
           if (!lease) return signal.aborted ? clientCancelledResponse() : capacityResponse();
           if (options.accountLoad!.cancelled || signal.aborted) { lease.release(); return clientCancelledResponse(); }
           options.accountLoad!.lease = lease;
-          preferredAccountId = lease.accountId;
+          effectivePreferredAccountId = lease.accountId;
         }
-        let safetyAlternateId: string | null = !affinityAccountId && preferredAccountId === refusalAwareId ? refusalAwareId : null;
+        let safetyAlternateId: string | null = !affinityAccountId && effectivePreferredAccountId === refusalAwareId ? refusalAwareId : null;
         // Resolved account-scoped, NOT through failoverAccountSnapshot: that helper marks a
         // rotation site, and rotation sites must apply their credential through
         // applyFailoverSnapshot's pairing rules. This is initial resolution — the code below
         // already pairs the snapshot's Kiro metadata, Copilot origin and Antigravity project
         // with this same bearer, exactly as it does for the active account.
-        let usedPreferredAccount = preferredAccountId !== null;
+        let usedPreferredAccount = effectivePreferredAccountId !== null;
         let resolved: OAuthAccessSnapshot;
-        if (preferredAccountId) {
+        if (effectivePreferredAccountId) {
           try {
             // `requireUsableAccount` makes a removed OR reauth-flagged account throw from
             // inside the resolver's own store read. Without it a revoked account resolves
@@ -961,7 +966,7 @@ export async function prepareResponsesTransport(
             // dispatch on an account already known to need a fresh login.
             resolved = await getValidAccessSnapshotForAccount(
               route.providerName,
-              preferredAccountId,
+              effectivePreferredAccountId,
               { requireUsableAccount: true },
             );
           } catch {

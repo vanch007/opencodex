@@ -184,3 +184,27 @@ test("a held Kiro capacity lease cannot invalidate its own affinity or dispatch 
     else process.env.OPENCODEX_KIRO_MODEL_DISCOVERY = priorDiscovery;
   }
 });
+
+test("explicit codexAccountRoutes map caller identity to configured account and honor affinity", async () => {
+  cfg.providers.xai!.oauthAccountFailover = {
+    enabled: true,
+    sessionAffinity: "conversation",
+    codexAccountRoutes: {
+      "workspace-user-a": ids[1]!,
+      "user-b@example.com": ids[2]!,
+    },
+  };
+
+  // Direct workspace ID mapping
+  expect(preferredGenericSessionAccount(cfg, "xai", "session-user-a", undefined, Date.now(), "workspace-user-a")).toBe(ids[1]);
+  bindGenericSessionAccount(cfg, "xai", "session-user-a", ids[1]!);
+  expect(genericSessionAccount(cfg, "xai", "session-user-a")).toBe(ids[1]);
+
+  // Direct email mapping
+  expect(preferredGenericSessionAccount(cfg, "xai", "session-user-b", undefined, Date.now(), "user-b@example.com")).toBe(ids[2]);
+
+  // Unmapped caller falls back to regular selection
+  const unmapped = preferredGenericSessionAccount(cfg, "xai", "session-unmapped", undefined, Date.now(), "workspace-unknown");
+  expect(ids.includes(unmapped!)).toBe(true);
+});
+

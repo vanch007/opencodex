@@ -759,6 +759,11 @@ export interface OcxProviderConfig {
      * Read only under `pool.kernel` with `strategy: "round-robin"`.
      */
     stickyLimit?: number;
+    /**
+     * Optional static routing map from caller Codex account ID (chatgpt-account-id or email)
+     * to target provider OAuth account ID, email, or alias.
+     */
+    codexAccountRoutes?: Record<string, string>;
   };
   /** Allow an explicitly key/oauth provider to run without a credential (for keyless local proxies). */
   keyOptional?: boolean;
