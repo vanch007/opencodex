@@ -128,17 +128,21 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                 </td>
                 <td style={{ textAlign: "right" }}>
                   <div className="cockpit-card-actions" style={{ justifyContent: "flex-end" }}>
-                    {!acc.active && (
-                      <button
-                        type="button"
-                        className="cockpit-icon-btn cockpit-icon-btn--primary"
-                        title="设为当前账号"
-                        disabled={isSwitching}
-                        onClick={() => onSwitch(acc)}
-                      >
-                        <IconPlay style={{ width: 14, height: 14 }} />
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      className={`cockpit-icon-btn ${acc.active ? "cockpit-icon-btn--active" : "cockpit-icon-btn--primary"}`}
+                      title={acc.active ? "当前正在使用的账号 (已激活)" : "设为当前账号"}
+                      disabled={isSwitching}
+                      onClick={() => onSwitch(acc)}
+                    >
+                      <IconPlay
+                        style={{
+                          width: 14,
+                          height: 14,
+                          color: acc.active ? "#00c950" : undefined,
+                        }}
+                      />
+                    </button>
                     <button
                       type="button"
                       className="cockpit-icon-btn"

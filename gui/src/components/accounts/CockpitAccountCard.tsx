@@ -338,17 +338,21 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
               <IconCopy style={{ width: 14, height: 14 }} />
             )}
           </button>
-          {!acc.active && (
-            <button
-              type="button"
-              className="cockpit-icon-btn cockpit-icon-btn--primary"
-              title="激活设为当前账号"
-              disabled={isSwitching}
-              onClick={() => onSwitch(acc)}
-            >
-              <IconPlay style={{ width: 14, height: 14 }} />
-            </button>
-          )}
+          <button
+            type="button"
+            className={`cockpit-icon-btn ${acc.active ? "cockpit-icon-btn--active" : "cockpit-icon-btn--primary"}`}
+            title={acc.active ? "当前正在使用的账号 (已激活)" : "激活设为当前账号"}
+            disabled={isSwitching}
+            onClick={() => onSwitch(acc)}
+          >
+            <IconPlay
+              style={{
+                width: 14,
+                height: 14,
+                color: acc.active ? "#00c950" : undefined,
+              }}
+            />
+          </button>
           <button
             type="button"
             className="cockpit-icon-btn"

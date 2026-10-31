@@ -663,6 +663,16 @@
   color: #2563eb;
 }
 
+.cockpit-icon-btn--active {
+  color: #00c950;
+  background: light-dark(#f0fdf4, #142f1f);
+}
+
+.cockpit-icon-btn--active:hover {
+  background: light-dark(#dcfce7, #1b422a);
+  color: #00c950;
+}
+
 .cockpit-icon-btn--danger:hover {
   background: light-dark(#fef2f2, #3b1d1d);
   color: #ef4444;
