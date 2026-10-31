@@ -50,7 +50,7 @@
       ],
       "children": {
         "google": [
-          "^(?:antigravity(?!-(?:balance|capacity|reset-priority)\\.test\\.ts$)|gcp|google|vertex)-"
+          "^(?:antigravity(?!-(?:balance|capacity|ide-sync|reset-priority)\\.test\\.ts$)|gcp|google|vertex)-"
         ],
         "anthropic": [
           "^(?:anthropic)-"
@@ -90,7 +90,7 @@
     "oauth": {
       "match": [
         "^(?:chatgpt|dsh-login|generic|state)-",
-        "^antigravity-(?:balance|capacity|reset-priority)\\.test\\.ts$"
+        "^antigravity-(?:balance|capacity|ide-sync|reset-priority)\\.test\\.ts$"
       ]
     },
     "claude-integration": {

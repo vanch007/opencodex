@@ -604,7 +604,18 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     clearModelCache(provider);
     clearGatherRoutedModelsInflight();
     clearQuotaCachesAfterAccountMutation(provider, false);
-    return jsonResponse({ ok: true, provider, activeAccountId: body.accountId });
+
+    let ideSync: unknown = undefined;
+    if (provider === "google-antigravity") {
+      const { syncAntigravityAccountToIde } = await import("../../oauth/antigravity-ide-sync");
+      const restartIfRunning = (body as { restartIde?: boolean }).restartIde !== false;
+      ideSync = await syncAntigravityAccountToIde(current.credential, { restartIfRunning }).catch(err => ({
+        success: false,
+        message: err instanceof Error ? err.message : String(err),
+      }));
+    }
+
+    return jsonResponse({ ok: true, provider, activeAccountId: body.accountId, ...(ideSync ? { ideSync } : {}) });
   }
 
   if (url.pathname === "/api/oauth/accounts/auto-switch" && req.method === "PUT") return handleAnthropicAccountThreshold(req, config);

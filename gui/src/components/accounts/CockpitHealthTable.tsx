@@ -131,17 +131,29 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                     <button
                       type="button"
                       className={`cockpit-icon-btn ${acc.active ? "cockpit-icon-btn--active" : "cockpit-icon-btn--primary"}`}
-                      title={acc.active ? "当前正在使用的账号 (已激活)" : "设为当前账号"}
+                      title={
+                        acc.active
+                          ? acc.provider === "google-antigravity"
+                            ? "当前正在使用的账号 (已同步至 Antigravity IDE)"
+                            : "当前正在使用的账号 (已激活)"
+                          : acc.provider === "google-antigravity"
+                          ? "切换 Antigravity 到此账号并同步至 IDE"
+                          : "设为当前账号"
+                      }
                       disabled={isSwitching}
                       onClick={() => onSwitch(acc)}
                     >
-                      <IconPlay
-                        style={{
-                          width: 14,
-                          height: 14,
-                          color: acc.active ? "#00c950" : undefined,
-                        }}
-                      />
+                      {isSwitching ? (
+                        <IconRefresh style={{ width: 14, height: 14, animation: "spin 1s linear infinite" }} />
+                      ) : (
+                        <IconPlay
+                          style={{
+                            width: 14,
+                            height: 14,
+                            color: acc.active ? "#00c950" : undefined,
+                          }}
+                        />
+                      )}
                     </button>
                     <button
                       type="button"
