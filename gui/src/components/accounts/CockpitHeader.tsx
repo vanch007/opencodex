@@ -1,10 +1,11 @@
-import React, { useRef, useState, useEffect } from "react";
+import React from "react";
 import { IconUser } from "../../icons";
 
 interface CockpitHeaderProps {
   totalCount: number;
   antigravityCount: number;
   openaiCount: number;
+  grokCount: number;
   selectedProvider: string;
   activeTab: "overview" | "instances" | "tasks" | "health";
   onSelectProvider: (provider: string) => void;
@@ -15,30 +16,12 @@ export const CockpitHeader: React.FC<CockpitHeaderProps> = ({
   totalCount,
   antigravityCount,
   openaiCount,
+  grokCount,
   selectedProvider,
   activeTab,
   onSelectProvider,
   onSelectTab,
 }) => {
-  const [providerMenuOpen, setProviderMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setProviderMenuOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
-
-  const providerLabel = selectedProvider === "google-antigravity"
-    ? `Antigravity IDE (${antigravityCount})`
-    : selectedProvider === "openai"
-      ? `OpenAI / Codex (${openaiCount})`
-      : `全部提供方 (${totalCount})`;
-
   return (
     <div className="cockpit-top-bar">
       {/* ── Top Row: Title & Version Tag ── */}
@@ -50,7 +33,7 @@ export const CockpitHeader: React.FC<CockpitHeaderProps> = ({
           </h1>
           <span
             className="cockpit-info-badge"
-            title="Cockpit 风格集中管理 Google Antigravity、OpenAI 与各提供商账号配额"
+            title="Cockpit 风格集中管理 Google Antigravity、OpenAI、xAI Grok 与各提供商账号配额"
           >
             ?
           </span>
@@ -63,57 +46,46 @@ export const CockpitHeader: React.FC<CockpitHeaderProps> = ({
         </div>
       </div>
 
-      {/* ── Second Row: Provider Selector Dropdown & Centered Navigation Pills ── */}
+      {/* ── Second Row: Provider Selection Tabs & Centered Navigation Pills ── */}
       <div className="cockpit-nav-row">
-        {/* Provider Dropdown */}
-        <div style={{ position: "relative" }} ref={menuRef}>
+        {/* Provider Tabs (Replaces Dropdown Menu) */}
+        <div className="cockpit-provider-tabs">
           <button
             type="button"
-            className="cockpit-provider-dropdown-btn"
-            onClick={() => setProviderMenuOpen(!providerMenuOpen)}
+            className={`cockpit-provider-tab${selectedProvider === "all" ? " active" : ""}`}
+            onClick={() => onSelectProvider("all")}
           >
-            <span style={{ fontSize: 14 }}>🚀</span>
-            <span>{providerLabel}</span>
-            <span style={{ fontSize: 11, opacity: 0.7 }}>⌄</span>
+            <span style={{ fontSize: 13 }}>🚀</span>
+            <span>全部提供方</span>
+            <span className="cockpit-provider-tab-badge">{totalCount}</span>
           </button>
-
-          {providerMenuOpen && (
-            <div className="cockpit-dropdown-menu">
-              <button
-                type="button"
-                className={`cockpit-dropdown-item${selectedProvider === "all" ? " active" : ""}`}
-                onClick={() => {
-                  onSelectProvider("all");
-                  setProviderMenuOpen(false);
-                }}
-              >
-                <span>全部提供方</span>
-                <span className="cockpit-provider-tab-badge">{totalCount}</span>
-              </button>
-              <button
-                type="button"
-                className={`cockpit-dropdown-item${selectedProvider === "google-antigravity" ? " active" : ""}`}
-                onClick={() => {
-                  onSelectProvider("google-antigravity");
-                  setProviderMenuOpen(false);
-                }}
-              >
-                <span>Google Antigravity</span>
-                <span className="cockpit-provider-tab-badge">{antigravityCount}</span>
-              </button>
-              <button
-                type="button"
-                className={`cockpit-dropdown-item${selectedProvider === "openai" ? " active" : ""}`}
-                onClick={() => {
-                  onSelectProvider("openai");
-                  setProviderMenuOpen(false);
-                }}
-              >
-                <span>OpenAI / Codex</span>
-                <span className="cockpit-provider-tab-badge">{openaiCount}</span>
-              </button>
-            </div>
-          )}
+          <button
+            type="button"
+            className={`cockpit-provider-tab${selectedProvider === "google-antigravity" ? " active" : ""}`}
+            onClick={() => onSelectProvider("google-antigravity")}
+          >
+            <span style={{ fontSize: 13 }}>🌐</span>
+            <span>Google Antigravity</span>
+            <span className="cockpit-provider-tab-badge">{antigravityCount}</span>
+          </button>
+          <button
+            type="button"
+            className={`cockpit-provider-tab${selectedProvider === "openai" ? " active" : ""}`}
+            onClick={() => onSelectProvider("openai")}
+          >
+            <span style={{ fontSize: 13 }}>⚡</span>
+            <span>OpenAI / Codex</span>
+            <span className="cockpit-provider-tab-badge">{openaiCount}</span>
+          </button>
+          <button
+            type="button"
+            className={`cockpit-provider-tab${selectedProvider === "xai" ? " active" : ""}`}
+            onClick={() => onSelectProvider("xai")}
+          >
+            <span style={{ fontSize: 13 }}>🤖</span>
+            <span>xAI Grok</span>
+            <span className="cockpit-provider-tab-badge">{grokCount}</span>
+          </button>
         </div>
 
         {/* Centered Navigation Tabs */}

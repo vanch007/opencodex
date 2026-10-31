@@ -113,6 +113,10 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                 <td style={{ fontSize: 12, minWidth: 160 }}>
                   {acc.provider === "google-antigravity" ? (
                     <span>Claude / Gemini 双配额正常</span>
+                  ) : acc.provider === "xai" ? (
+                    <span>
+                      周配额剩余 {Math.max(0, Math.min(100, Math.round(100 - (acc.quota?.weeklyPercent ?? 0))))}%
+                    </span>
                   ) : (
                     <span>
                       5-Week 剩余 {Math.max(0, Math.min(100, Math.round(100 - (acc.quota?.monthlyPercent ?? 0))))}%

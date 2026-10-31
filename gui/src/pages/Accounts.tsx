@@ -49,14 +49,15 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
             const data = await res.json() as { activeAccountId?: string | null; accounts?: Array<any> };
             const activeId = data.activeAccountId;
             for (const acc of data.accounts ?? []) {
+              const isXai = p === "xai";
               results.push({
                 id: acc.id,
                 provider: p,
-                providerLabel: p === "google-antigravity" ? "Google Antigravity" : p,
-                email: acc.email ?? "",
+                providerLabel: p === "google-antigravity" ? "Google Antigravity" : isXai ? "xAI Grok" : p,
+                email: acc.email || (isXai ? (acc.alias ? `${acc.alias}@x.ai` : `grok-${acc.id.slice(0, 8)}@x.ai`) : ""),
                 alias: acc.alias,
                 active: acc.active === true || acc.id === activeId,
-                plan: acc.plan ?? "g1-pro-tier",
+                plan: acc.plan ?? (isXai ? "GROK" : "g1-pro-tier"),
                 quota: acc.quota ?? null,
                 quotaMode: acc.quotaMode,
                 quotaUnavailable: acc.quotaUnavailable,
@@ -66,6 +67,8 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
                 expiresAt: acc.expiresAt,
                 updatedAt: acc.quota?.updatedAt ?? acc.updatedAt,
                 createdAt: acc.createdAt,
+                teamName: isXai ? "xAI 官方账户" : undefined,
+                loginMethod: isXai ? "xAI OAuth 授权" : undefined,
               });
             }
           } catch { /* ignore individual provider fail */ }
@@ -318,6 +321,7 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
         totalCount={accounts.length}
         antigravityCount={providerCounts["google-antigravity"] ?? 0}
         openaiCount={providerCounts["openai"] ?? 0}
+        grokCount={providerCounts["xai"] ?? 0}
         selectedProvider={selectedProvider}
         activeTab={activeTab}
         onSelectProvider={setSelectedProvider}
@@ -366,6 +370,13 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
               onClick={() => void handleAddOAuthAccount("openai")}
             >
               <span>添加 OpenAI / Codex</span>
+            </button>
+            <button
+              type="button"
+              className="cockpit-dropdown-item"
+              onClick={() => void handleAddOAuthAccount("xai")}
+            >
+              <span>添加 xAI Grok</span>
             </button>
           </div>
         )}

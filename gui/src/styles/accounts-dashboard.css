@@ -77,53 +77,59 @@
   box-shadow: 0 0 6px rgba(0, 201, 80, 0.4);
 }
 
-/* ── Nav Row (Provider Dropdown + Center Navigation Pills) ── */
+/* ── Nav Row (Provider Tabs + Centered Navigation Pills) ── */
 .cockpit-nav-row {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
-  gap: 20px;
+  justify-content: space-between;
+  gap: 16px;
   position: relative;
   flex-wrap: wrap;
 }
 
-.cockpit-provider-dropdown-btn {
-  appearance: none;
-  background: light-dark(#ffffff, #1e1f23);
+.cockpit-provider-tabs {
+  display: inline-flex;
+  align-items: center;
+  background: light-dark(#f1f5f9, #1e1f23);
+  padding: 4px;
+  border-radius: 14px;
   border: 1px solid light-dark(#e2e8f0, #2f3239);
-  border-radius: 12px;
-  padding: 7px 14px;
+  gap: 4px;
+}
+
+.cockpit-provider-tab {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
   font-size: 13px;
-  font-weight: 700;
-  color: light-dark(#0f172a, #f8fafc);
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 10px;
+  cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  gap: 6px;
   transition: all 0.15s ease;
 }
 
-.cockpit-provider-dropdown-btn:hover {
-  border-color: light-dark(#cbd5e1, #475569);
-  background: light-dark(#f8fafc, #26292f);
+.cockpit-provider-tab:hover {
+  color: var(--text);
 }
 
-.cockpit-dropdown-menu {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  margin-top: 6px;
-  background: light-dark(#ffffff, #202227);
-  border: 1px solid light-dark(#e2e8f0, #33363f);
-  border-radius: 12px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
-  padding: 6px;
-  min-width: 210px;
-  z-index: 100;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.cockpit-provider-tab.active {
+  background: light-dark(#ffffff, #2a2d34);
+  color: light-dark(#0f172a, #f8fafc);
+  font-weight: 700;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.cockpit-provider-tab-badge {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 9999px;
+  background: light-dark(#e2e8f0, #3a3d46);
+  color: inherit;
 }
 
 .cockpit-dropdown-item {
@@ -490,6 +496,11 @@
 
 .cockpit-badge-plan--plus {
   background: #10b981;
+  color: #ffffff;
+}
+
+.cockpit-badge-plan--grok {
+  background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
   color: #ffffff;
 }
 

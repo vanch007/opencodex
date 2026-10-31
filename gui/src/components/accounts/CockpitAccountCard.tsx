@@ -59,20 +59,25 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
   onExport,
 }) => {
   const isAntigravity = acc.provider === "google-antigravity";
+  const isGrok = acc.provider === "xai";
   const isCopied = copiedId === acc.id;
 
   // Plan styling
-  const planText = (acc.plan === "g1-pro-tier" || acc.plan === "pro")
-    ? "PRO"
-    : acc.plan === "plus"
-      ? "PLUS"
-      : (acc.plan ?? "FREE").toUpperCase();
+  const planText = isGrok
+    ? "GROK"
+    : (acc.plan === "g1-pro-tier" || acc.plan === "pro")
+      ? "PRO"
+      : acc.plan === "plus"
+        ? "PLUS"
+        : (acc.plan ?? "FREE").toUpperCase();
 
-  const planClass = (planText === "PRO")
-    ? "cockpit-badge-plan"
-    : planText === "PLUS"
-      ? "cockpit-badge-plan cockpit-badge-plan--plus"
-      : "cockpit-badge-plan cockpit-badge-plan--free";
+  const planClass = isGrok
+    ? "cockpit-badge-plan cockpit-badge-plan--grok"
+    : (planText === "PRO")
+      ? "cockpit-badge-plan"
+      : planText === "PLUS"
+        ? "cockpit-badge-plan cockpit-badge-plan--plus"
+        : "cockpit-badge-plan cockpit-badge-plan--free";
 
   return (
     <div className={`cockpit-card${acc.active ? " cockpit-card--active" : ""}`}>
@@ -99,6 +104,94 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
       <div className="cockpit-card-body">
         {isAntigravity ? (
           <AntigravityQuotaCard quota={acc.quota} pending={acc.quotaPending} />
+        ) : isGrok ? (
+          /* xAI Grok Card Body */
+          <div className="cockpit-codex-body">
+            {/* Team & Memo Row */}
+            <div className="cockpit-codex-top-row">
+              <span className="cockpit-codex-team">Team: {acc.teamName || "xAI 官方账户"}</span>
+              <button
+                type="button"
+                className="cockpit-mini-btn"
+                onClick={() => onEditAlias(acc)}
+                title="修改备注别名"
+              >
+                加备注
+              </button>
+              <button
+                type="button"
+                className="cockpit-mini-btn"
+                onClick={() => onRefresh(acc)}
+                title="刷新配额"
+              >
+                ↻ 刷新
+              </button>
+            </div>
+
+            {/* Login & User ID */}
+            <div className="cockpit-codex-meta">
+              <span>{acc.loginMethod || "xAI OAuth 授权"} | ID: {acc.id}</span>
+              {acc.alias && <span style={{ color: "var(--text)" }}>别名: {acc.alias}</span>}
+            </div>
+
+            {/* Weekly Quota Row */}
+            {(() => {
+              const usedPct = acc.quota?.weeklyPercent ?? 0;
+              const remainPct = Math.max(0, Math.min(100, Math.round(100 - usedPct)));
+              const toneClass = remainPct < 50
+                ? "ag-quota-pct--danger"
+                : remainPct < 80
+                  ? "ag-quota-pct--warn"
+                  : "ag-quota-pct--healthy";
+              const barToneClass = remainPct < 50
+                ? "ag-quota-bar-fill--danger"
+                : remainPct < 80
+                  ? "ag-quota-bar-fill--warn"
+                  : "ag-quota-bar-fill--healthy";
+
+              return (
+                <div className="cockpit-codex-quota-row">
+                  <div className="cockpit-codex-quota-head">
+                    <span className="cockpit-codex-quota-title">
+                      <span style={{ marginRight: 4 }}>🕒</span>
+                      周配额 (Weekly)
+                    </span>
+                    <span className={`ag-quota-pct ${toneClass}`}>{remainPct}%</span>
+                  </div>
+                  <div className="ag-quota-bar-track">
+                    <div
+                      className={`ag-quota-bar-fill ${barToneClass}`}
+                      style={{ width: `${remainPct}%` }}
+                    />
+                  </div>
+                  {acc.quota?.weeklyResetAt && (
+                    <div className="ag-quota-reset">
+                      {formatAntigravityReset(acc.quota.weeklyResetAt)}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Expiry / Status Box */}
+            <div className={`cockpit-codex-expiry${acc.paused ? "" : " cockpit-codex-expiry--ok"}`}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span>📅 授权状态</span>
+                <span style={{ fontWeight: 700 }}>{acc.paused ? "已暂停" : "正常有效"}</span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontFamily: "monospace", fontSize: 11 }}>
+                  {formatCockpitDate(acc.updatedAt || Date.now())}
+                </span>
+                <span
+                  style={{ cursor: "pointer", textDecoration: "underline" }}
+                  onClick={() => onRefresh(acc)}
+                >
+                  刷新
+                </span>
+              </div>
+            </div>
+          </div>
         ) : (
           /* OpenAI / Codex Card Body */
           <div className="cockpit-codex-body">
