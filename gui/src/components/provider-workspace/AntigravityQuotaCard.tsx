@@ -194,6 +194,9 @@ export function AntigravityQuotaCard({ quota, pending }: AntigravityQuotaCardPro
           </div>
         )}
       </div>
+      <div className="ag-quota-credits">
+        <span>可用 AI 积分:</span>
+      </div>
     </div>
   );
 }

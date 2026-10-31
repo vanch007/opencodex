@@ -6,12 +6,18 @@
   gap: 16px;
   padding: 8px 4px 40px;
   width: 100%;
-  max-width: 1600px;
+  max-width: 1680px;
   margin: 0 auto;
 }
 
 /* ── Top Header ── */
 .cockpit-top-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.cockpit-header-top-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -22,7 +28,7 @@
 .cockpit-title-group {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 .cockpit-page-title {
@@ -50,6 +56,47 @@
   cursor: help;
 }
 
+/* Announcement Banner Pill */
+.cockpit-banner-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: light-dark(#eff6ff, #1e293b);
+  border: 1px solid light-dark(#dbeafe, #334155);
+  border-radius: 9999px;
+  padding: 4px 14px;
+  font-size: 12px;
+  max-width: 680px;
+  box-shadow: 0 1px 2px rgba(59, 130, 246, 0.05);
+}
+
+.cockpit-banner-tag {
+  background: #3b82f6;
+  color: #ffffff;
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 9999px;
+  letter-spacing: 0.02em;
+}
+
+.cockpit-banner-text {
+  color: light-dark(#1e40af, #93c5fd);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cockpit-banner-action {
+  color: #3b82f6;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cockpit-banner-action:hover { text-decoration: underline; }
+
 .cockpit-version-tag {
   display: inline-flex;
   align-items: center;
@@ -57,7 +104,7 @@
   font-size: 12px;
   color: var(--muted);
   background: light-dark(#f1f5f9, #232529);
-  padding: 4px 10px;
+  padding: 4px 12px;
   border-radius: 9999px;
   border: 1px solid light-dark(#e2e8f0, #33363d);
 }
@@ -68,27 +115,103 @@
   border-radius: 50%;
   background: #00c950;
   display: inline-block;
+  box-shadow: 0 0 6px rgba(0, 201, 80, 0.4);
 }
 
-/* ── Provider Selector & Navigation Pills ── */
+/* ── Nav Row (Provider Dropdown + Center Navigation Pills) ── */
 .cockpit-nav-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  justify-content: flex-start;
+  gap: 20px;
+  position: relative;
   flex-wrap: wrap;
 }
 
-.cockpit-provider-tabs {
-  display: inline-flex;
-  background: light-dark(#f1f5f9, #1e1f23);
-  padding: 4px;
-  border-radius: 12px;
+.cockpit-provider-dropdown-btn {
+  appearance: none;
+  background: light-dark(#ffffff, #1e1f23);
   border: 1px solid light-dark(#e2e8f0, #2f3239);
+  border-radius: 12px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  color: light-dark(#0f172a, #f8fafc);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: all 0.15s ease;
+}
+
+.cockpit-provider-dropdown-btn:hover {
+  border-color: light-dark(#cbd5e1, #475569);
+  background: light-dark(#f8fafc, #26292f);
+}
+
+.cockpit-dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 6px;
+  background: light-dark(#ffffff, #202227);
+  border: 1px solid light-dark(#e2e8f0, #33363f);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  padding: 6px;
+  min-width: 210px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
   gap: 4px;
 }
 
-.cockpit-provider-tab {
+.cockpit-dropdown-item {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 12px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.cockpit-dropdown-item:hover { background: light-dark(#f1f5f9, #2b2e36); }
+
+.cockpit-dropdown-item.active {
+  background: light-dark(#eff6ff, #1e293b);
+  color: #3b82f6;
+  font-weight: 700;
+}
+
+.cockpit-provider-tab-badge {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 9999px;
+  background: light-dark(#e2e8f0, #3a3d46);
+  color: inherit;
+}
+
+/* Centered Navigation Pills */
+.cockpit-nav-pills {
+  display: inline-flex;
+  align-items: center;
+  background: light-dark(#f1f5f9, #1e1f23);
+  padding: 4px;
+  border-radius: 14px;
+  border: 1px solid light-dark(#e2e8f0, #2f3239);
+  gap: 4px;
+  margin: 0 auto;
+}
+
+.cockpit-nav-pill {
   appearance: none;
   border: none;
   background: transparent;
@@ -96,7 +219,7 @@
   font-size: 13px;
   font-weight: 600;
   padding: 6px 14px;
-  border-radius: 8px;
+  border-radius: 10px;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -104,23 +227,13 @@
   transition: all 0.15s ease;
 }
 
-.cockpit-provider-tab:hover {
-  color: var(--text);
-}
+.cockpit-nav-pill:hover { color: var(--text); }
 
-.cockpit-provider-tab.active {
+.cockpit-nav-pill.active {
   background: light-dark(#ffffff, #2a2d34);
   color: light-dark(#0f172a, #f8fafc);
   font-weight: 700;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-}
-
-.cockpit-provider-tab-badge {
-  font-size: 11px;
-  padding: 1px 6px;
-  border-radius: 9999px;
-  background: light-dark(#e2e8f0, #3a3d46);
-  color: inherit;
 }
 
 /* ── Filter Toolbar ── */
@@ -130,11 +243,11 @@
   justify-content: space-between;
   gap: 12px;
   background: light-dark(#ffffff, #1e1f23);
-  padding: 8px 12px;
+  padding: 8px 14px;
   border-radius: 14px;
   border: 1px solid light-dark(#e2e8f0, #2f3239);
   flex-wrap: wrap;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
 }
 
 .cockpit-toolbar-left {
@@ -155,23 +268,19 @@
   border-radius: 10px;
   padding: 6px 12px;
   min-width: 200px;
-  max-width: 320px;
-  flex: 1;
+  max-width: 280px;
 }
 
 .cockpit-search-input {
-  appearance: none;
   border: none;
   background: transparent;
-  outline: none;
-  color: var(--text);
   font-size: 13px;
+  color: var(--text);
+  outline: none;
   width: 100%;
 }
 
-.cockpit-search-input::placeholder {
-  color: var(--muted);
-}
+.cockpit-search-input::placeholder { color: var(--muted); }
 
 .cockpit-view-toggle {
   display: inline-flex;
@@ -187,80 +296,98 @@
   border: none;
   background: transparent;
   color: var(--muted);
-  width: 32px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
-  cursor: pointer;
-}
-
-.cockpit-view-btn.active {
-  background: light-dark(#ffffff, #3a3d46);
-  color: var(--text);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
-}
-
-.cockpit-filter-select {
-  appearance: none;
-  background: light-dark(#f8fafc, #26282e);
-  border: 1px solid light-dark(#e2e8f0, #363942);
-  color: var(--text);
-  font-size: 12.5px;
-  font-weight: 600;
-  padding: 6px 12px;
-  border-radius: 10px;
-  cursor: pointer;
-  outline: none;
-}
-
-.cockpit-toolbar-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.cockpit-btn {
-  appearance: none;
-  border: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  font-weight: 600;
-  padding: 7px 14px;
-  border-radius: 10px;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
-.cockpit-btn-primary {
-  background: linear-gradient(135deg, #0284c7 0%, #2563eb 100%);
-  color: #ffffff;
-  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.25);
+.cockpit-view-btn.active {
+  background: light-dark(#ffffff, #373b44);
+  color: #3b82f6;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
 }
 
-.cockpit-btn-primary:hover {
-  filter: brightness(1.08);
-}
-
-.cockpit-btn-ghost {
-  background: light-dark(#f1f5f9, #26282e);
-  color: var(--text);
+.cockpit-filter-select {
+  appearance: none;
+  background: light-dark(#f8fafc, #26282e) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 10px center;
   border: 1px solid light-dark(#e2e8f0, #363942);
+  border-radius: 10px;
+  padding: 6px 30px 6px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+  outline: none;
 }
 
-.cockpit-btn-ghost:hover {
-  background: light-dark(#e2e8f0, #31343c);
+/* Toolbar Right Round Buttons */
+.cockpit-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.cockpit-btn-ghost:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+.cockpit-round-btn {
+  appearance: none;
+  border: 1px solid light-dark(#e2e8f0, #363942);
+  background: light-dark(#ffffff, #26282e);
+  color: var(--text);
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 
-/* ── Subheader / Quick Actions ── */
+.cockpit-round-btn:hover {
+  background: light-dark(#f1f5f9, #31343c);
+  border-color: light-dark(#cbd5e1, #4b5563);
+}
+
+.cockpit-round-btn--primary {
+  background: #0284c7;
+  border-color: #0284c7;
+  color: #ffffff;
+}
+
+.cockpit-round-btn--primary:hover {
+  background: #0369a1;
+  border-color: #0369a1;
+}
+
+.cockpit-round-btn.active {
+  background: light-dark(#eff6ff, #1e293b);
+  border-color: #3b82f6;
+  color: #3b82f6;
+}
+
+.cockpit-add-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 6px;
+  z-index: 100;
+  background: light-dark(#ffffff, #202227);
+  border: 1px solid light-dark(#e2e8f0, #33363f);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  padding: 6px;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* ── Sub Toolbar (Select All & Total Counts) ── */
 .cockpit-sub-toolbar {
   display: flex;
   align-items: center;
@@ -270,38 +397,46 @@
   color: var(--muted);
 }
 
-/* ── Cards Grid ── */
+.cockpit-checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+/* ── Cards Grid (4 Columns on Desktop) ── */
 .cockpit-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 18px;
+  gap: 16px;
 }
 
-@media (min-width: 1400px) {
+@media (min-width: 1360px) {
   .cockpit-grid {
     grid-template-columns: repeat(4, 1fr);
   }
 }
 
-@media (max-width: 1399px) and (min-width: 1040px) {
+@media (max-width: 1359px) and (min-width: 1020px) {
   .cockpit-grid {
     grid-template-columns: repeat(3, 1fr);
   }
 }
 
-@media (max-width: 1039px) and (min-width: 700px) {
+@media (max-width: 1019px) and (min-width: 680px) {
   .cockpit-grid {
     grid-template-columns: repeat(2, 1fr);
   }
 }
 
-@media (max-width: 699px) {
+@media (max-width: 679px) {
   .cockpit-grid {
     grid-template-columns: 1fr;
   }
 }
 
-/* ── Account Card ── */
+/* ── Cockpit Account Card ── */
 .cockpit-card {
   background: light-dark(#ffffff, #1e1f23);
   border: 1.5px solid light-dark(#eaedf0, #2d3036);
@@ -348,6 +483,7 @@
   border: 1.5px solid light-dark(#94a3b8, #64748b);
   background: transparent;
   flex-shrink: 0;
+  cursor: pointer;
 }
 
 .cockpit-card-email {
@@ -398,16 +534,32 @@
   color: #ffffff;
 }
 
-/* Card Body (Quota Content) */
-.cockpit-card-body {
-  flex: 1;
-}
+/* Card Body (Quota Box) */
+.cockpit-card-body { flex: 1; }
 
 .cockpit-card-body .ag-quota-card {
   margin: 0;
   padding: 12px 14px;
   background: light-dark(#f8fafc, #25272c);
   border-radius: 12px;
+}
+
+.cockpit-card-body .ag-quota-grid { gap: 16px; }
+
+.cockpit-card-body .ag-quota-reset {
+  font-size: 11px;
+  letter-spacing: -0.02em;
+}
+
+/* AI Credits line inside card */
+.ag-quota-credits {
+  margin-top: 10px;
+  padding-top: 6px;
+  font-size: 11.5px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 /* Codex Card Specific Body */
@@ -418,6 +570,31 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.cockpit-codex-top-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.cockpit-codex-team { color: var(--muted); }
+
+.cockpit-mini-btn {
+  appearance: none;
+  border: 1px solid light-dark(#e2e8f0, #3a3d46);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.cockpit-mini-btn:hover {
+  background: light-dark(#edf2f7, #33363f);
+  color: var(--text);
 }
 
 .cockpit-codex-meta {
@@ -442,9 +619,9 @@
   font-weight: 700;
 }
 
-.cockpit-codex-quota-pct {
-  color: #00c950;
-  font-variant-numeric: tabular-nums;
+.cockpit-codex-quota-title {
+  display: inline-flex;
+  align-items: center;
 }
 
 .cockpit-codex-expiry {
@@ -454,9 +631,10 @@
   font-size: 11.5px;
   background: light-dark(#fef2f2, #3b1d1d);
   color: light-dark(#b91c1c, #fca5a5);
-  padding: 4px 8px;
+  padding: 5px 8px;
   border-radius: 6px;
   border: 1px solid light-dark(#fee2e2, #5c2424);
+  white-space: nowrap;
 }
 
 .cockpit-codex-expiry--ok {
@@ -478,12 +656,22 @@
   font-size: 11.5px;
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: nowrap;
+}
+
+.cockpit-standard-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid light-dark(#e2e8f0, #3a3d46);
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 .cockpit-card-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
 }
 
 .cockpit-icon-btn {
@@ -491,8 +679,8 @@
   border: none;
   background: transparent;
   color: var(--muted);
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   border-radius: 6px;
   display: flex;
   align-items: center;
@@ -506,9 +694,7 @@
   color: var(--text);
 }
 
-.cockpit-icon-btn--primary {
-  color: #3b82f6;
-}
+.cockpit-icon-btn--primary { color: #3b82f6; }
 
 .cockpit-icon-btn--primary:hover {
   background: light-dark(#eff6ff, #1e293b);
@@ -549,8 +735,14 @@
   color: var(--text);
 }
 
-.cockpit-table tr:hover td {
-  background: light-dark(#f8fafc, #23252a);
+.cockpit-table tr:hover td { background: light-dark(#f8fafc, #23252a); }
+
+/* ── Instances & Tasks Placeholder Card ── */
+.cockpit-instances-card {
+  background: light-dark(#ffffff, #1e1f23);
+  border: 1px solid light-dark(#e2e8f0, #2f3239);
+  border-radius: 16px;
+  padding: 24px;
 }
 
 /* ── Empty State ── */
@@ -565,4 +757,27 @@
   flex-direction: column;
   align-items: center;
   gap: 12px;
+}
+
+/* ── Info Modal Backdrop & Card ── */
+.cockpit-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.cockpit-modal-card {
+  background: light-dark(#ffffff, #202227);
+  border: 1px solid light-dark(#e2e8f0, #33363f);
+  border-radius: 16px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.2);
+  padding: 20px;
+  width: 100%;
+  max-width: 600px;
 }
