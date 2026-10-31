@@ -14,6 +14,7 @@ import {
 } from "../../provider-workspace/report";
 import { type QuotaWindowKey } from "../QuotaBars";
 import QuotaBars from "../QuotaBars";
+import { AntigravityQuotaCard, isAntigravityQuota } from "./AntigravityQuotaCard";
 import { WorkBuddyCredits } from "./WorkBuddyCredits";
 
 function bcp47(locale: Locale): string {
@@ -49,6 +50,9 @@ export function ProviderCapacityQuota({ report, pending }: { report: ProviderQuo
   const { locale } = useI18n();
   const aggregation = capacityAggregationFromReport(report);
   const primaryQuota = accountQuotaFromReport(report);
+  if (isAntigravityQuota(primaryQuota)) {
+    return <AntigravityQuotaCard quota={primaryQuota} pending={pending && !primaryQuota} />;
+  }
   // Only a passively observed row carries this; see ProviderUsage for the same rule.
   const observedAt = observedAtFromReport(report);
   const credits = primaryQuota?.creditsUsd;

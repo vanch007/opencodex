@@ -564,8 +564,12 @@ export default function ProviderAuthPanel({
                   const maskedId = displayAccountId(account.id);
                   const healthLabel = formatOAuthHealthLabel(t, account.health);
                   const healthSummary = formatOAuthHealthSummary(t, item.name, account.id, account.health);
+                  const isAntigravity = item.name === "google-antigravity";
+                  const secondaryText = isAntigravity
+                    ? (account.alias && account.email ? account.email : null)
+                    : [account.email, `${t("prov.accountId")}: ${maskedId}`].filter(Boolean).join(" · ");
                   return (
-                  <li key={account.id} className={`pwi-auth-acct${account.active ? " pwi-auth-acct--active" : ""}`}>
+                  <li key={account.id} className={`pwi-auth-acct${account.active ? " pwi-auth-acct--active" : ""}${isAntigravity ? " pwi-auth-acct--antigravity" : ""}`}>
                     <div className={`pwi-auth-row${account.active ? " pwi-auth-row--active" : ""}`}>
                     <button type="button" className="pwi-auth-row-main"
                       onClick={() => { if (!account.active && !account.paused && !showReauth && !inCooldown && !switchingAccountId && !pausingAccountId) void authHandlers.onSwitchAccount(item.name, account); }}
@@ -574,8 +578,13 @@ export default function ProviderAuthPanel({
                       disabled={Boolean(account.paused || showReauth || inCooldown || switchingAccountId || pausingAccountId)}>
                       <span className={`pwi-auth-dot ${showReauth ? "pwi-auth-dot--warn" : account.active && !account.paused ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
                       <span className="pwi-auth-row-copy">
-                        <span className="pwi-auth-row-heading"><span className="pwi-auth-row-label">{label}</span>{planLabel && <span className="badge badge-green">{planLabel}</span>}</span>
-                        <span className="pwi-auth-row-secondary">{[account.email, `${t("prov.accountId")}: ${maskedId}`].filter(Boolean).join(" · ")}</span>
+                        <span className="pwi-auth-row-heading">
+                          <span className="pwi-auth-row-label">{label}</span>
+                          {planLabel && !isAntigravity && <span className="badge badge-green">{planLabel}</span>}
+                        </span>
+                        {secondaryText && (
+                          <span className="pwi-auth-row-secondary">{secondaryText}</span>
+                        )}
                         {healthSummary && (
                           <span className="pwi-auth-row-secondary faint">{healthSummary}</span>
                         )}
@@ -592,7 +601,14 @@ export default function ProviderAuthPanel({
                       {showReauth && !healthLabel && <span className="badge badge-amber">{t("pws.reauth")}</span>}
                       {kiroSkipReasonKey(account, item.name) && <span className="badge badge-amber">{t(kiroSkipReasonKey(account, item.name)!)}</span>}
                       {account.paused && <span className="badge badge-muted" title={account.pauseDetails ? formatAccountPauseTooltip(t, locale, account.pauseDetails) : undefined}>{t("codexAuth.paused")}</span>}
-                      {account.active && !account.paused && <span className="badge badge-primary">{t("prov.accountActive")}</span>}
+                      {account.active && !account.paused && (
+                        isAntigravity
+                          ? <span className="badge-ag-active">{t("prov.accountActive")}</span>
+                          : <span className="badge badge-primary">{t("prov.accountActive")}</span>
+                      )}
+                      {isAntigravity && planLabel && (
+                        <span className="badge-ag-plan">{planLabel}</span>
+                      )}
                       {switching && <span className="badge badge-muted">{t("pws.accountSwitching")}</span>}
                     </button>
                     {typeof account.paused === "boolean" && authHandlers.onPauseAccount && (
@@ -652,7 +668,8 @@ export default function ProviderAuthPanel({
                         />
                       )}
                       <ProviderAccountQuota quotaMode={account.quotaMode} quota={account.quota}
-                        quotaUnavailable={account.quotaUnavailable} quotaPending={account.quotaPending} quotaFailure={account.quotaFailure} />
+                        quotaUnavailable={account.quotaUnavailable} quotaPending={account.quotaPending} quotaFailure={account.quotaFailure}
+                        provider={item.name} />
                     </div>
                   </li>
                   );
@@ -746,7 +763,8 @@ export default function ProviderAuthPanel({
                     </div>
                     <div className="pwi-auth-acct-quota">
                       <ProviderAccountQuota quotaMode={entry.quotaMode} quota={entry.quota}
-                        quotaUnavailable={entry.quotaUnavailable} quotaPending={entry.quotaPending} quotaFailure={entry.quotaFailure} />
+                        quotaUnavailable={entry.quotaUnavailable} quotaPending={entry.quotaPending} quotaFailure={entry.quotaFailure}
+                        provider={item.name} />
                     </div>
                   </li>
                 ))}

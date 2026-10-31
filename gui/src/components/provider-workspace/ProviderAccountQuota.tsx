@@ -2,11 +2,19 @@ import { parseQuotaFailureCode } from "../../../../src/providers/quota-types";
 import { useT } from "../../i18n/shared";
 import { accountQuotaFromReport } from "../../provider-workspace/report";
 import { formatRelativeTime, relativeTimeLabelsFromT } from "../../provider-workspace/usage";
+import { AntigravityQuotaCard, isAntigravityQuota } from "./AntigravityQuotaCard";
 import { ProviderCapacityQuota } from "./ProviderCapacityQuota";
 import type { AccountQuotaReading } from "./types";
 
 /** The same reading states and credit/window renderer for current and all-account views. */
-export default function ProviderAccountQuota({ quota: rawQuota, quotaMode, quotaUnavailable, quotaPending, quotaFailure }: AccountQuotaReading) {
+export default function ProviderAccountQuota({
+  quota: rawQuota,
+  quotaMode,
+  quotaUnavailable,
+  quotaPending,
+  quotaFailure,
+  provider,
+}: AccountQuotaReading & { provider?: string }) {
   const t = useT();
   const quota = accountQuotaFromReport({ quota: rawQuota });
   if (quotaMode === "unsupported") {
@@ -15,17 +23,23 @@ export default function ProviderAccountQuota({ quota: rawQuota, quotaMode, quota
   const failure = quotaMode === "probe" && quotaUnavailable ? parseQuotaFailureCode(quotaFailure) : undefined;
   const pending = quotaMode === "probe" && quotaPending === true;
   const state = quotaUnavailable ? "unavailable" : pending ? "pending" : quota ? "ready" : quotaMode === "passive" ? "unobserved" : "unknown";
+  const isAntigravity = provider === "google-antigravity" || isAntigravityQuota(quota) || isAntigravityQuota(rawQuota);
+
   return <div data-quota-state={state}>
     {quotaUnavailable && <p className="muted pwi-auth-acct-quota-stale">{t(failure ? `pws.quotaFailure.${failure}` : "pws.accountQuotaUnavailable")}</p>}
     {quota || pending ? (
-      <ProviderCapacityQuota
-        report={{ quota, updatedAt: quota?.updatedAt, ...(quotaMode === "passive" ? { observed: true } : {}) }}
-        pending={pending && !quota}
-      />
+      isAntigravity ? (
+        <AntigravityQuotaCard quota={quota} pending={pending && !quota} />
+      ) : (
+        <ProviderCapacityQuota
+          report={{ quota, updatedAt: quota?.updatedAt, ...(quotaMode === "passive" ? { observed: true } : {}) }}
+          pending={pending && !quota}
+        />
+      )
     ) : !quotaUnavailable && (
       <p className="muted">{t(quotaMode === "passive" ? "pws.quotaUnobserved" : "pws.quotaUnavailable")}</p>
     )}
-    {quotaUnavailable && quota && <p className="muted">
+    {quotaUnavailable && quota && !isAntigravity && <p className="muted">
       {t("pws.stats.quotaUpdated")}: {formatRelativeTime(quota.updatedAt, relativeTimeLabelsFromT(t))}
     </p>}
   </div>;

@@ -3,12 +3,14 @@ import { useT } from "../../i18n/shared";
 import { IconRefresh } from "../../icons";
 import { accountQuotaFromReport, currentAccountQuotaReport, formatQuotaSourceLabel, type ProviderQuotaReportView } from "../../provider-workspace/report";
 import { formatRelativeTime, relativeTimeLabelsFromT } from "../../provider-workspace/usage";
+import { isAntigravityQuota } from "./AntigravityQuotaCard";
 import ProviderAccountQuota from "./ProviderAccountQuota";
 import type { AccountQuotaReading } from "./types";
 
-export default function ProviderCurrentQuota({ report, reading, onRefreshQuota }: {
+export default function ProviderCurrentQuota({ report, reading, provider, onRefreshQuota }: {
   report?: ProviderQuotaReportView;
   reading?: AccountQuotaReading;
+  provider?: string;
   onRefreshQuota?: () => Promise<boolean>;
 }) {
   const t = useT();
@@ -22,6 +24,7 @@ export default function ProviderCurrentQuota({ report, reading, onRefreshQuota }
     ...(current?.observed === true ? { quotaMode: "passive" } : {}),
   };
   const quota = accountQuotaFromReport({ quota: effective.quota });
+  const isAntigravity = provider === "google-antigravity" || isAntigravityQuota(quota) || isAntigravityQuota(effective.quota);
   const [refreshing, setRefreshing] = useState(false);
   const [result, setResult] = useState<boolean | null>(null);
   const refresh = async () => {
@@ -45,8 +48,8 @@ export default function ProviderCurrentQuota({ report, reading, onRefreshQuota }
         </button>
       </div>}
     </div>
-    <ProviderAccountQuota {...effective} />
-    {quota && !effective.quotaUnavailable && effective.quotaMode !== "unsupported" && <dl className="pws-kv pws-usage-meta">
+    <ProviderAccountQuota {...effective} provider={provider} />
+    {quota && !effective.quotaUnavailable && effective.quotaMode !== "unsupported" && !isAntigravity && <dl className="pws-kv pws-usage-meta">
       {!rowOwnsReading && current?.source?.trim() && <div className="pws-kv-row">
         <dt>{t("pws.stats.source")}</dt><dd>{formatQuotaSourceLabel(current.source)}</dd>
       </div>}

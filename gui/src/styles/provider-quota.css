@@ -116,3 +116,194 @@
   .quota-row--credits .bar { grid-column: 1 / 4; grid-row: 3; }
   .quota-row--credits .quota-val { grid-column: 4; grid-row: 3; white-space: nowrap; }
 }
+
+/* ── Antigravity Two-Column Quota Card (Remaining Quota Solid Fill) ── */
+
+.ag-quota-card {
+  background: light-dark(#f8f9fa, #1e1f22);
+  border: 1px solid light-dark(#eaedf0, #2e3035);
+  border-radius: 14px;
+  padding: 16px 20px 18px;
+  margin-top: 10px;
+  margin-bottom: 6px;
+}
+
+.ag-quota-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 28px;
+}
+
+.ag-quota-grid--argon {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+@media (max-width: 540px) {
+  .ag-quota-grid,
+  .ag-quota-grid--argon {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+}
+
+.ag-quota-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ag-quota-col-title {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: light-dark(#0f172a, #f1f5f9);
+  margin-bottom: 12px;
+  letter-spacing: -0.01em;
+}
+
+.ag-quota-window {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 14px;
+}
+
+.ag-quota-window:last-child {
+  margin-bottom: 0;
+}
+
+.ag-quota-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 6px;
+}
+
+.ag-quota-label {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: light-dark(#1e293b, #e2e8f0);
+}
+
+.ag-quota-pct {
+  font-size: 13.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+.ag-quota-pct--healthy {
+  color: #00c950;
+}
+
+.ag-quota-pct--warn {
+  color: #f59e0b;
+}
+
+.ag-quota-pct--danger {
+  color: #ef4444;
+}
+
+.ag-quota-bar-track {
+  width: 100%;
+  height: 6px;
+  background: light-dark(#e2e8f0, #334155);
+  border-radius: 9999px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.ag-quota-bar-fill {
+  height: 100%;
+  border-radius: 9999px;
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.ag-quota-bar-fill--healthy {
+  background: #00c950;
+}
+
+.ag-quota-bar-fill--warn {
+  background: #f59e0b;
+}
+
+.ag-quota-bar-fill--danger {
+  background: #ef4444;
+}
+
+.ag-quota-reset {
+  font-size: 12px;
+  color: light-dark(#475569, #94a3b8);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: -0.01em;
+}
+
+.badge-ag-active {
+  background: #00c950;
+  color: #ffffff;
+  font-weight: 700;
+  border-radius: 9999px;
+  padding: 3px 12px;
+  font-size: 12.5px;
+  margin-left: 8px;
+  display: inline-flex;
+  align-items: center;
+  line-height: 1.3;
+}
+
+.badge-ag-plan {
+  background: linear-gradient(135deg, #0284c7 0%, #2563eb 100%);
+  color: #ffffff;
+  font-weight: 700;
+  border-radius: 9999px;
+  padding: 3px 12px;
+  font-size: 12.5px;
+  margin-left: 8px;
+  letter-spacing: 0.03em;
+  display: inline-flex;
+  align-items: center;
+  line-height: 1.3;
+}
+
+.pwi-auth-acct--antigravity {
+  background: transparent !important;
+  border-radius: 14px;
+}
+
+.pwi-auth-acct--antigravity .pwi-auth-acct-quota {
+  padding: 0 0 10px 0;
+}
+
+.pwi-auth-acct--antigravity .pwi-auth-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  border: 1.5px solid light-dark(#64748b, #94a3b8);
+  background: transparent;
+  flex-shrink: 0;
+  margin-right: 8px;
+}
+
+.pwi-auth-acct--antigravity .pwi-auth-row-label {
+  font-size: 15.5px;
+  font-weight: 700;
+  color: light-dark(#0f172a, #f8fafc);
+  letter-spacing: -0.01em;
+}
+
+.pwi-auth-acct--antigravity .pwi-auth-row-copy {
+  margin-right: auto;
+}
+
+.pwi-auth-acct--antigravity .pwi-auth-row .btn-ghost,
+.pwi-auth-acct--antigravity .pwi-auth-row .pwi-auth-row-remove {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.pwi-auth-acct--antigravity .pwi-auth-row:hover .btn-ghost,
+.pwi-auth-acct--antigravity .pwi-auth-row:hover .pwi-auth-row-remove {
+  opacity: 1;
+}
+

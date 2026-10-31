@@ -1,3 +1,4 @@
+import { formatAntigravityReset, isAntigravityQuota } from "../../gui/src/components/provider-workspace/AntigravityQuotaCard";
 import { describe, expect, test } from "bun:test";
 import {
   barWidth,
@@ -301,5 +302,23 @@ describe("formatResetFuture", () => {
   test("seconds-epoch inputs are normalized to milliseconds", () => {
     const secs = Math.floor((NOW + 30 * 60_000) / 1000);
     expect(formatResetFuture(secs, t, "en", NOW)).toBe("quota.resetsRelativeMinutes:30");
+  });
+});
+
+describe("AntigravityQuotaCard helpers", () => {
+  test("isAntigravityQuota detects Antigravity custom windows", () => {
+    expect(isAntigravityQuota(null)).toBe(false);
+    expect(isAntigravityQuota({ customWindows: [{ label: "Fable", percent: 10 }] })).toBe(false);
+    expect(isAntigravityQuota({ customWindows: [{ label: "Gem", percent: 0 }] })).toBe(true);
+    expect(isAntigravityQuota({ customWindows: [{ label: "Cla (Weekly)", percent: 5 }] })).toBe(true);
+    expect(isAntigravityQuota({ quota: { customWindows: [{ label: "Argon", percent: 50 }] } })).toBe(true);
+  });
+
+  test("formatAntigravityReset formats countdown and target timestamp", () => {
+    expect(formatAntigravityReset(undefined)).toBe("");
+    expect(formatAntigravityReset(NaN)).toBe("");
+    const future = Date.now() + 4 * 3_600_000 + 59 * 60_000;
+    const formatted = formatAntigravityReset(future);
+    expect(formatted).toMatch(/^4h 59m \(\d{2}\/\d{2} \d{2}:\d{2}\)$/);
   });
 });
