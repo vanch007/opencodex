@@ -22,3 +22,4 @@ export interface UnifiedAccountItem {
   loginMethod?: string;
   resetCount?: number;
 }
+

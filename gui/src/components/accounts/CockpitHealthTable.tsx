@@ -185,3 +185,4 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
     </div>
   );
 };
+

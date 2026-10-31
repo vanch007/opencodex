@@ -56,47 +56,6 @@
   cursor: help;
 }
 
-/* Announcement Banner Pill */
-.cockpit-banner-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  background: light-dark(#eff6ff, #1e293b);
-  border: 1px solid light-dark(#dbeafe, #334155);
-  border-radius: 9999px;
-  padding: 4px 14px;
-  font-size: 12px;
-  max-width: 680px;
-  box-shadow: 0 1px 2px rgba(59, 130, 246, 0.05);
-}
-
-.cockpit-banner-tag {
-  background: #3b82f6;
-  color: #ffffff;
-  font-size: 10.5px;
-  font-weight: 700;
-  padding: 1px 6px;
-  border-radius: 9999px;
-  letter-spacing: 0.02em;
-}
-
-.cockpit-banner-text {
-  color: light-dark(#1e40af, #93c5fd);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.cockpit-banner-action {
-  color: #3b82f6;
-  font-weight: 700;
-  text-decoration: none;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.cockpit-banner-action:hover { text-decoration: underline; }
-
 .cockpit-version-tag {
   display: inline-flex;
   align-items: center;

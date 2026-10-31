@@ -41,7 +41,7 @@ export const CockpitHeader: React.FC<CockpitHeaderProps> = ({
 
   return (
     <div className="cockpit-top-bar">
-      {/* ── Top Row: Title, Announcement Banner, Version Tag ── */}
+      {/* ── Top Row: Title & Version Tag ── */}
       <div className="cockpit-header-top-row">
         <div className="cockpit-title-group">
           <h1 className="cockpit-page-title">
@@ -54,22 +54,6 @@ export const CockpitHeader: React.FC<CockpitHeaderProps> = ({
           >
             ?
           </span>
-        </div>
-
-        {/* Announcement / Tip Banner */}
-        <div className="cockpit-banner-pill">
-          <span className="cockpit-banner-tag">推广</span>
-          <span className="cockpit-banner-text">
-            GPT Plus 30天成品号 | 各套餐实付代充 可续费 需要的了解下 感谢支持
-          </span>
-          <a
-            href="https://github.com/vanch/opencodex"
-            target="_blank"
-            rel="noreferrer"
-            className="cockpit-banner-action"
-          >
-            选购
-          </a>
         </div>
 
         {/* Version & Status Tag */}
