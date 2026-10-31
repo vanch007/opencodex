@@ -107,3 +107,24 @@ test("disabled pools, other providers and aborted callers cannot reserve", async
   expect(dto.supported).toContain("maxConcurrentPerAccount");
   expect(dto.maxConcurrentPerAccount).toBe(1);
 });
+
+test("multi-account all-cooled deadlock breaks out using unexhausted accounts", async () => {
+  const [a, b, c] = await seed();
+  rotateGenericOAuthAccountOn429(config(), provider, a!, "60", Date.now(), model);
+  rotateGenericOAuthAccountOn429(config(), provider, b!, "60", Date.now(), model);
+  rotateGenericOAuthAccountOn429(config(), provider, c!, "60", Date.now(), model);
+  const lease = await reserve();
+  expect(lease).not.toBeNull();
+  expect([a, b, c]).toContain(lease!.accountId);
+});
+
+test("auto-promotes healthiest candidate when active account weekly quota is exhausted", async () => {
+  const [a, b, c] = await seed();
+  setCachedProviderAccountQuotaForTests(provider, a!, { updatedAt: Date.now(), customWindows: [{ label: "Gem weekly", percent: 100 }] });
+  setCachedProviderAccountQuotaForTests(provider, b!, { updatedAt: Date.now(), customWindows: [{ label: "Gem weekly", percent: 10 }] });
+  const lease = await reserve();
+  expect(lease?.accountId).toBe(b);
+  await new Promise(resolve => setTimeout(resolve, 50));
+  expect(getAccountSet(provider)?.activeAccountId).toBe(b);
+});
+

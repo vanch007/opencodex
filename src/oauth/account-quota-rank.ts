@@ -250,19 +250,22 @@ export function rankAccountsByHeadroom(
     const account = accounts?.get(id);
     const exhaustion = provider === "kiro" && account ? kiroAccountEvidence(account).exhausted : undefined;
     const headroom = headroomOf(provider, id, requestedModelId, account);
-    if (exhaustion !== undefined || headroom !== null) sawEvidence = true;
+    const weeklyResetAt = provider === "google-antigravity" ? antigravityAccountWeeklyResetAt(id, requestedModelId) : null;
+    if (exhaustion !== undefined || headroom !== null || weeklyResetAt !== null) sawEvidence = true;
 
     if (isAccountQuotaExhausted(provider, id, requestedModelId, account)
       || (provider === "kiro" && exhaustion === undefined && headroom !== null && headroom <= 0))
       return { id, bucket: RANK_EXHAUSTED, headroom: 0, index };
-    if (headroom === null) return { id, bucket: RANK_UNKNOWN, headroom: 0, index };
-    return { id, bucket: RANK_HEALTHY, headroom, index };
+    if (headroom === null && weeklyResetAt === null) return { id, bucket: RANK_UNKNOWN, headroom: 0, index };
+    return { id, bucket: RANK_HEALTHY, headroom: headroom ?? 0, index, weeklyResetAt: weeklyResetAt ?? undefined };
   });
 
   if (!sawEvidence) return [...ring];
 
   return ranked
-    .sort((a, b) => (a.bucket - b.bucket) || (b.headroom - a.headroom) || (a.index - b.index))
+    .sort((a, b) => (a.bucket - b.bucket)
+      || ((a.weeklyResetAt ?? Infinity) - (b.weeklyResetAt ?? Infinity))
+      || (b.headroom - a.headroom) || (a.index - b.index))
     .map(entry => entry.id);
 }
 
@@ -294,6 +297,7 @@ export function hasHeadroomEvidence(
   }
   return ids.some(id =>
     headroomOf(provider, id, requestedModelId, accounts?.get(id)) !== null
+    || (provider === "google-antigravity" && antigravityAccountWeeklyResetAt(id, requestedModelId) !== null)
     || (provider === "kiro" && accounts?.get(id) !== undefined
       && kiroAccountEvidence(accounts.get(id)!).exhausted !== undefined));
 }
@@ -308,6 +312,12 @@ const MIN_EXHAUSTED_COOLDOWN_MS = 5 * 60_000;
 const MAX_EXHAUSTED_COOLDOWN_MS = 24 * 60 * 60_000;
 
 export function exhaustedCooldownMs(provider: string, accountId: string, now = Date.now(), account?: ProviderAccount): number | null {
+  if (provider === "google-antigravity") {
+    if (!isAccountQuotaExhausted(provider, accountId, undefined, account)) return null;
+    const resetAt = antigravityAccountWeeklyResetAt(accountId, undefined, now);
+    const untilReset = resetAt === null ? 60 * 60_000 : resetAt - now;
+    return Math.min(Math.max(untilReset, MIN_EXHAUSTED_COOLDOWN_MS), MAX_EXHAUSTED_COOLDOWN_MS);
+  }
   if (provider !== "kiro") return null;
   const evidence = account ? kiroAccountEvidence(account, now) : {};
   if (!evidence.exhausted) return null;

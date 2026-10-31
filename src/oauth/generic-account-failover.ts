@@ -472,7 +472,10 @@ export function noteGenericPoolSelection(
   const poolKey = genericPoolKey(providerName);
   const limit = genericStickyLimit(config, providerName);
   const family = classifyModelFamilyForQuota(providerName, requestedModelId);
-  const picked = pickRoundRobinAccount(poolKey, eligibleFailoverAccounts(providerName, Date.now(), family), limit);
+  const allEligible = preferKiroModelSupport(providerName, eligibleFailoverAccounts(providerName, Date.now(), family), requestedModelId, config);
+  const nonExhausted = allEligible.filter(id => !isAccountQuotaExhausted(providerName, id, requestedModelId));
+  const eligible = nonExhausted.length > 0 ? nonExhausted : allEligible;
+  const picked = pickRoundRobinAccount(poolKey, eligible, limit);
   // The resolver may have admitted a different account than the ring proposed: a removal, a
   // reauth verdict or a manual selection can land during credential resolution. Realign the
   // cursor onto what actually served rather than leaving it on a road not taken.
@@ -527,8 +530,8 @@ export function rotateGenericOAuthAccountOnRefusal(
     : undefined;
   // An account whose allowance is provably spent gets a reset-aligned cooldown instead of
   // the default minute: retrying it every 60s until the window rolls over is pure waste.
-  // A Retry-After from upstream still wins — it is the server's own instruction.
-  const exhausted = parsed === undefined && providerName !== "kiro"
+  // For google-antigravity, weekly exhaustion must take precedence over transient Retry-After (e.g. 1s).
+  const exhausted = (providerName === "google-antigravity" || parsed === undefined) && providerName !== "kiro"
     ? exhaustedCooldownMs(providerName, failedAccountId, now, set.accounts.find(account => account.id === failedAccountId)) : null;
   const cooldownMs = kind === "suspended" ? 24 * 60 * 60_000
     : kind === "monthly_quota" ? (monthlyCooldownMs ?? ACCOUNT_QUOTA_TTL_MS)
@@ -597,13 +600,18 @@ function pickGenericOAuthFailoverAccount(
   const start = order.indexOf(failedAccountId);
   const ring = start >= 0 ? [...order.slice(start + 1), ...order.slice(0, start)] : order;
   let candidates = ring.filter(id => id !== failedAccountId && eligible.includes(id));
+  const rows = new Map(set.accounts.map(row => [row.id, row]));
+  const nonExhausted = candidates.filter(id => !isAccountQuotaExhausted(providerName, id, requestedModelId, rows.get(id)));
+  if (nonExhausted.length > 0) {
+    candidates = nonExhausted;
+  }
   if (candidates.length === 0) return null;
   const capacityProvider = providerName === "kiro" || providerName === "google-antigravity"
     && (config.providers[providerName]?.oauthAccountFailover?.enabled ?? config.oauthAccountFailover?.enabled) === true;
   const cap = capacityProvider ? config.providers[providerName]?.oauthAccountFailover?.maxConcurrentPerAccount : undefined;
   if (typeof cap === "number" && Number.isInteger(cap) && cap >= 1 && cap <= 100) {
     const withRoom = candidates.filter(id => accountInFlight(providerName, id) < cap);
-    if (withRoom.length > 0 || providerName === "google-antigravity") candidates = withRoom;
+    if (withRoom.length > 0) candidates = withRoom;
   }
   candidates = preferKiroModelSupport(providerName, candidates, requestedModelId, config);
   // The 429 path branches too. Leaving it on the quota ranking would make a configured
@@ -747,12 +755,14 @@ export function preferredInitialAccount(
     const family = classifyModelFamilyForQuota(providerName, requestedModelId);
     const eligibleNow = preferKiroModelSupport(providerName,
       eligibleFailoverAccounts(providerName, now, family), requestedModelId, config);
-    if (eligibleNow.length === 0) return null;
+    const nonExhausted = eligibleNow.filter(id => !isAccountQuotaExhausted(providerName, id, requestedModelId, accountRows?.get(id)));
+    const candidates = nonExhausted.length > 0 ? nonExhausted : eligibleNow;
+    if (candidates.length === 0) return null;
     // PEEK, not pick: this proposal is discardable, and advancing the ring for an account the
     // resolver then rejects would skip a turn for nothing. noteGenericPoolSelection commits.
     const picked = peekRoundRobinAccount(
       genericPoolKey(providerName),
-      eligibleNow,
+      candidates,
       genericStickyLimit(config, providerName),
     );
     return picked && picked !== active ? picked : null;
@@ -774,7 +784,12 @@ export function preferredInitialAccount(
   }
 
   const activeRow = selected.accounts.find(account => account.id === active);
-  if (activeRow && activeRow.paused !== true && activeRow.needsReauth !== true
+  // Weekly activation: only evacuate off an untouched active account when started reserves exist,
+  // to avoid prematurely activating clean accounts. A healthy started active account stays put under quota.
+  const activeWeeklyReset = active ? antigravityAccountWeeklyResetAt(active, requestedModelId, now) : null;
+  const hasStartedSibling = providerName === "google-antigravity" && activeWeeklyReset === null
+    && order.some(id => id !== active && antigravityAccountWeeklyResetAt(id, requestedModelId, now) !== null);
+  if (!hasStartedSibling && activeRow && activeRow.paused !== true && activeRow.needsReauth !== true
     && !isCooled(providerName, activeRow.id, now, classifyModelFamilyForQuota(providerName, requestedModelId))
     && !isAccountQuotaExhausted(providerName, activeRow.id, requestedModelId, activeRow)) return null;
 

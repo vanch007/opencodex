@@ -397,7 +397,7 @@ describe("Antigravity reset-first weekly prioritization", () => {
         { label: "Gem (Weekly)", percent: 5, resetAt: now + 7 * 86400_000 },
       ],
     });
-    expect(rankAccountsByHeadroom("google-antigravity", ["a", "b"], "gemini-3.8-flash")[0]).toBe("b");
+    expect(rankAccountsByHeadroom("google-antigravity", ["a", "b"], "gemini-3.8-flash")[0]).toBe("a");
     expect(rankAccountsByResetFirst("google-antigravity", ["b", "a"], "gemini-3.8-flash", now)[0]).toBe("a");
   });
 
