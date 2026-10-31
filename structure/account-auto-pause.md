@@ -20,6 +20,10 @@ per account, and an observer without a final-send report never attributes a resp
 observer had reported. Regression coverage:
 `tests/responses/responses-account-auto-pause-wire-owner.test.ts`.
 
+DeepSeek's expiring image uploads during adapter construction use the captured credential
+selection fence, but are not inference attempts and do not contribute to account refusal
+counters. Their transport and lifetime follow the [Responses image replay contract](transports/responses.md#fetch-helper-import-boundary).
+
 ## Permanent account refusal policy
 
 `providers.<name>.accountAutoPause` is optional, default off, with an integer
@@ -44,7 +48,7 @@ account selectors and uploaded-file constraints continue to suppress alternate m
 
 `src/oauth/account-auto-pause.ts` captures the exact sending OAuth snapshot, Codex context
 or API-key selection and validates outgoing credential headers before observing a response.
-`src/oauth/account-auto-pause-policy.ts` recognizes whole account-scoped 401/403 messages,
+`src/oauth/account-auto-pause-policy.ts` recognizes whole account-scoped 401/403 messages (for Google, only the whole Cloud Code Assist Terms of Service account-ban messages Google has returned, alone or with its fixed contact or appeal sentence, on a consistent 403 `PERMISSION_DENIED` envelope; project-scoped `CONSUMER_SUSPENDED` and service-enablement errors are excluded),
 serializes response-arrival decisions, resets on accepted HTTP responses, and excludes
 transient/quota/model/request failures. No provider body or account identifier enters its log.
 The opt-in counter defaults to two refusals; each process owns its counters. Durable pause

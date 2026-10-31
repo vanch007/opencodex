@@ -18,6 +18,7 @@ import {
 import { noteAttemptRecoveryWithheld } from "../request-log";
 import { withProviderRequestSlot } from "../../providers/request-pacing";
 import { providerFetch, fetchWithHeaderTimeout, safeHostLabel } from "./fetch-helpers";
+import { isLocalUpstream } from "../../lib/local-upstream";
 import {
   transientRetryPolicyFor,
   rateLimitRetryDelayMs,
@@ -28,7 +29,7 @@ import {
   fetchWithTransientRetry,
   fetchWithResetRetry,
   applyUpstreamRecoveryInit,
-  isNonReplayableResponse,
+  isNonReplayableResponse, isSameTargetRetryHold,
   prepareSameTarget429Wait,
   SendBudgetExhaustedError,
 } from "../../lib/upstream-retry";
@@ -140,8 +141,7 @@ export function createAdapterContinuations(
   } = transportState;
   const { route, translatorBudget, inboundWire, parsed } = requestState;
   const { routedCompaction } = sidecarState;
-  const { upstream, connectMs, rateLimitPolicy, stallTimeoutMs, localUpstream } = adapterExchange;
-  const bodyInactivityMs = resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream });
+  const { upstream, connectMs, rateLimitPolicy, stallTimeoutMs } = adapterExchange;
   const {
     adapterDispatchBudget,
     noteAdapterPhysicalSend,
@@ -250,7 +250,7 @@ export function createAdapterContinuations(
             transportState.activeAdapter.fetchResponse!(builtContinuationRequest, {
               kiroPreferAccountFailover: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro"),
               abortSignal: upstream.signal,
-              timeoutMs: connectMs,
+              timeoutMs: route.provider.authMode === "forward" ? connectMs : 0,
               sendBudget: adapterDispatchBudget,
               onPhysicalSend: send => noteAdapterPhysicalSend(continuationEstimate, send),
               onRecoveryWithheld: noteAdapterRecoveryWithheld,
@@ -285,7 +285,7 @@ export function createAdapterContinuations(
                 body: builtContinuationRequest.body,
               }, recovery),
               upstream.signal,
-              connectMs,
+              route.provider.authMode === "forward" ? connectMs : 0,
               nextParsed.stream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
               dispatchOverride: oauthDispatch(builtContinuationRequest, nextParsed),
@@ -350,7 +350,7 @@ export function createAdapterContinuations(
         && !kiroReplaySetupFailed
         // A synthesized replay refusal is not a rate limit; replaying the continuation on
         // it would re-send a turn whose first send may already have been processed.
-        && !isNonReplayableResponse(response)
+        && !isNonReplayableResponse(response) && !isSameTargetRetryHold(response)
        && rateLimitPolicy !== null
         && adapterExchange.rateLimitRetries < rateLimitPolicy.attempts
         // The main recovery loop and the passthrough ladder both consult the shared remainder
@@ -719,6 +719,7 @@ export function createAdapterContinuations(
       // The shared signal is not aborted on timeout: this generator must still emit
       // the error that the already-live Responses bridge turns into a terminal.
       const parse = async function* (current: Response): AsyncGenerator<AdapterEvent> {
+        const bodyInactivityMs = resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream: isLocalUpstream(transportState.sameTargetRequest?.url ?? route.provider.baseUrl) });
         if (!current.ok) {
           yield await adapterExchange.thinkingSignatureRecovery.projectHttpFailure(current, upstream.signal);
         } else if (nextParsed.stream) {

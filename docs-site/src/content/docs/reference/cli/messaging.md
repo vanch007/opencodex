@@ -233,9 +233,11 @@ Crash mutation locks fail closed and need operator recovery;
 the wrapper never guesses that an old lock is abandoned.
 State and recovery-journal publication sync the file and containing directory before dependent
 remote work; journal removal also syncs its directory. `remote_storage_unknown` (exit 3) means
-the storage change's crash durability could not be confirmed: inspect state before explicit
-recovery rather than automatically retrying. A safely readable journal with malformed JSON or
-schema does not block peer removal, but is retained for operator recovery; unsafe storage and
+the storage change's crash durability could not be confirmed. On macOS, an ACL refusal or probe
+failure after file replacement also reports this code: the new state is already visible, but its
+ACL privacy and crash durability are unconfirmed. Inspect state and permissions before explicit
+recovery rather than automatically retrying or rolling back. A safely readable journal with malformed
+JSON or schema does not block peer removal, but is retained for operator recovery; unsafe storage and
 failure to invalidate a matching journal still refuse removal.
 
 The foreground owner shares finite connection/request/helper/buffer limits across
@@ -244,7 +246,11 @@ hold twelve authenticated connections, four more stay reserved for the owner's o
 control, outgoing probes and renewal, and at most eight tunnel
 children and two transient control/inspection helpers, ten total. Setup is bounded by
 30 seconds across the whole selected peer batch. A final lease renewal precedes startup
-success; final and periodic renewal batches have five-second deadlines, within the setup
+success. If SSH reports that a selected forward port was lost, setup closes the owned
+pair and selects fresh ports, up to three attempts within that same deadline. SSH forward
+confirmation, loopback checks and authenticated peer readiness must all succeed. Other
+setup failures stop immediately; published routes do not reconnect automatically. Final
+and periodic renewal batches have five-second deadlines, within the setup
 deadline where applicable, and periodic maintenance runs every ten seconds.
 Cancellation stops only owned
 SSH helpers/listeners; it leaves Codex daemons, threads and unrelated proxies alone.

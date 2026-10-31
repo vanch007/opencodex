@@ -178,6 +178,7 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
 | `decisionTimeoutMs?` | `number` | `4000` | `strategy: "jev"` only. Decision deadline before failing open, 1000–120000 ms. |
 | `decisionQuotaSignals?` | `boolean` | `false` | JEV only. Explicit `true` sends loaded advisory quota evidence to the selected backend; never changes hard eligibility or account selection. |
 | `decisionQuotaTiers?` | `{ moderate?: number; limited?: number; nearlyExhausted?: number }` | `{ limited: 70, nearlyExhausted: 90 }` | JEV only. Partial overrides merge with defaults; finite 0–100 values must be strictly ascending. `moderate` is absent unless explicit. Does not enable signals by itself. |
+| `sessionPin?` | `{ ttlMs: number }` | off | JEV only. Keeps an explicit client session on the target JEV chose for it while the session stays active; `ttlMs` is the idle window, 60000–86400000. `null` clears. See [Session pin for JEV](/guides/combos/#session-pin-for-jev). |
 
 Quota settings, privacy and unknown-pool semantics are described in
 [Advisory quota signals for JEV](/guides/combos/#advisory-quota-signals-for-jev).
@@ -399,6 +400,29 @@ prompt bodies, or provider secrets.
 CLI: `ocx logs history`, `ocx logs get <request-id>`,
 `ocx logs explain <request-id>`, `ocx logs rebuild-index`,
 `ocx logs index-status`, `ocx route policy list | show | dry-run | evaluate`.
+
+### Index validation and recovery
+
+An existing history index is checked in a read-only worker when first opened.
+History queries wait for that initial check without blocking the proxy's serving
+thread. Synchronous routing reads report busy during validation, so routing
+profiles apply their `unknownEvidence.health` policy. A successful small inline
+rebuild is usable immediately; a worker rebuild is checked before publication.
+
+After a successful check or rebuild, the next read at least five minutes later
+starts one background integrity check. Reads from the verified index continue
+during that check. Normal refreshes retain schema, source-identity and offset
+validation without a full synchronous scan, and an idle index starts no timer.
+Temporary check failures, such as a busy database or unavailable worker, leave
+the index intact and retry on a subsequent read after a 30-second backoff.
+An index that has not completed initial validation remains unavailable meanwhile.
+
+Detected corruption triggers automatic reconstruction from `usage.jsonl`, with
+one retry for an affected asynchronous history or analytics read. Closing or
+rebuilding the index discards old check results and waits for the scanner to
+release the file before replacing it. Validation and recovery never rewrite the
+canonical ledger. The initial check still takes time proportional to index size;
+later background checks run only when the index is used.
 
 ## Migration
 

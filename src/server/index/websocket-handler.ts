@@ -2,6 +2,8 @@ import { nativeSteeringUnavailableReason, nativeResponseControlMode, type Native
 import { NativeInjectionChannel } from "../responses/native-injection";
 import { NativeSteeringChannel, NativeSteeringError } from "../responses/native-steering";
 import { createNativeSteeringLogObserver } from "../responses/native-steering-log";
+import { reasoningArchiveErrorResponse } from "../responses/reasoning-archive-error";
+import { captureAdmissionPolicy } from "../capture-admission-policy";
 import type { Server, ServerWebSocket } from "bun";
 import {
   LIVE_SIDEBAND_UPSTREAM_OPEN_TIMEOUT_MS,
@@ -18,6 +20,7 @@ import {
   webSocketFrameBytes,
 } from "./live-sideband";
 import { markActivity } from "../../lib/sidecar-tracker";
+import { isReplayRefusalResponse } from "../../lib/upstream-retry";
 import {
   buildWarmupCompletionFrames,
   buildWsErrorFrame,
@@ -301,6 +304,7 @@ export function createWebsocketHandler(
         }
 
         // Only a genuinely admitted turn may receive steering or continuations.
+        const advisorAdmissionPolicy = captureAdmissionPolicy(config, ws.data.admission);
         const finishActivity = ws.data.responsesActivity?.beginTurn(frame.input);
         ws.data.nativeControl = nativeControl;
         const payload: Record<string, unknown> = { ...frame };
@@ -341,6 +345,7 @@ export function createWebsocketHandler(
           try {
             let terminalRecorder: ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined;
             const response = await handleResponses(req, config, logCtx, {
+              advisorAdmissionPolicy,
               ...(wsAdmission ? { admission: wsAdmission } : {}),
               forceEmptyResponseId: true,
               inboundTransport: "websocket",
@@ -354,6 +359,12 @@ export function createWebsocketHandler(
                 terminalRecorder = recorder;
               },
             });
+            // This ingress finalizes directly, without the HTTP deferred logger.
+            // Preserve recorder provenance before framing a synthetic 429 as a WS error.
+            if (isReplayRefusalResponse(response)) {
+              logCtx.causeHint = "transport-ambiguous";
+              logCtx.terminalSource = "synthetic";
+            }
             const observeLog = nativeControl?.relayActive
               ? createNativeSteeringLogObserver(logCtx, () => recordFirstOutput(logCtx, start))
               : (payload: string) => inspectResponseLogSsePayload(logCtx, payload);
@@ -394,6 +405,15 @@ export function createWebsocketHandler(
                   type: "rate_limit_error",
                   message: cooldownErrorMessage(err, accountSelector),
                 }));
+                return;
+              }
+              // A local archive refusal happens before any send. Carry the same sanitized 503
+              // body and stable code as HTTP so no filesystem path reaches the client frame.
+              const archiveError = reasoningArchiveErrorResponse(err);
+              if (archiveError) {
+                finalizeLog(archiveError.status);
+                const body = await archiveError.json() as { error: Record<string, unknown> };
+                sendJsonFrame(ws, buildWsErrorFrame(archiveError.status, body.error));
                 return;
               }
               finalizeLog(502);

@@ -1,5 +1,5 @@
 import { openCodeZenGeminiEndpoint } from "../types/opencode-zen";
-import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./base";
+import type { AdapterFetchContext, AdapterRequest, IncomingMeta, ProviderAdapter } from "./base";
 import { debugDroppedFrame, debugProviderDiagnosticLazy } from "../lib/debug";
 import { createToolCallIdAllocator } from "./tool-call-id";
 import { openCodeGoGeminiEndpoint } from "../types/opencode-go";
@@ -37,6 +37,7 @@ import {
 } from "./google-antigravity-replay";
 import { canonicalAntigravityUsageModel, resolveAntigravityEffortWireModel } from "../providers/antigravity-models";
 import { selectVertexEndpoint, vertexInferenceUrl, vertexReplayModelKey } from "./google-vertex-endpoint";
+import { resolveVertexApiKeyProject, VERTEX_PROJECT_AUTO } from "./google-vertex-key-project";
 import { forgetThoughtSignatureForReplay, lookupReplayThoughtSignature } from "../responses/thought-signature-replay";
 import {
   isTranslatorBudgetExceededError,
@@ -380,6 +381,7 @@ function messagesToGeminiFormat(
   stripRejectedClaudeSdkParagraph = false,
   isCloudCodeAssist = false,
   nestToolResultImages = false,
+  toolResponseImagesLast = false,
 ): { systemInstruction?: unknown; contents: unknown[]; replayedCallIds: string[] } {
   // Neutralize Codex's GPT-5 identity line (Gemini/Antigravity share this path) so a routed model
   // never misreports as GPT-5/OpenAI, and never leaks the proxy identity upstream.
@@ -559,11 +561,17 @@ function messagesToGeminiFormat(
           }
 
           const responseParts: unknown[] = [];
+          const trailingImages: unknown[] = [];
           for (const call of toolCalls) {
             const result = resultsById.get(call.wireCallId);
-            if (result) responseParts.push(...geminiToolResultParts(result, call.wireName, call.wireCallId, nestToolResultImages));
-            else responseParts.push(geminiMissingToolResultPart(call.wireName, call.wireCallId));
+            if (result) {
+              const [response, ...images] = geminiToolResultParts(result, call.wireName, call.wireCallId, nestToolResultImages);
+              responseParts.push(response);
+              (toolResponseImagesLast ? trailingImages : responseParts).push(...images);
+            } else responseParts.push(geminiMissingToolResultPart(call.wireName, call.wireCallId));
           }
+          // CCA Claude misses later responses when image siblings interrupt the response batch.
+          responseParts.push(...trailingImages);
           const orphanParts = orphanResults.flatMap(geminiOrphanToolResultParts);
           contents.push({ role: "user", parts: responseParts });
           // Orphan images cannot share Argon's response batch or claim another call's ownership.
@@ -987,7 +995,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       : {}),
 
     /** Compile an admitted request into the selected Gemini endpoint, body and authentication. */
-    async buildRequest(parsed: OcxParsedRequest) {
+    async buildRequest(parsed: OcxParsedRequest, incoming?: IncomingMeta) {
       // Structured-output admission runs FIRST, before messagesToGeminiFormat writes
       // lastInjectedCallIds/lastReasoningReplayScope: a refused request must not leave
       // adapter-scoped replay state pointing at call ids that never went out. These
@@ -1028,7 +1036,14 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         : provider.googleMode === "vertex" || openCodeZenGeminiEndpoint(provider, parsed.modelId) !== undefined
           ? parsed.modelId
           : resolveDirectGeminiWireModelId(parsed.modelId, provider.directGeminiWireRenames !== false);
-      returnsThoughtSummaries = provider.googleMode === "cloud-code-assist"
+      const configuredEfforts = configuredReasoningEfforts(provider, parsed.modelId);
+      const thinkingEligible = provider.googleMode !== "cloud-code-assist"
+        && !isImageCapableModel(parsed.modelId)
+        && (configuredEfforts !== undefined
+          ? configuredEfforts.length > 0
+          : (provider.googleMode !== "vertex"
+            && (parsed.modelId === "gemini-3.5-flash" || parsed.modelId === "gemini-3.6-flash")));
+      returnsThoughtSummaries = (provider.googleMode === "cloud-code-assist" || (thinkingEligible && provider.showThinkingSummary === true))
         && /^gemini-/.test(routedModelId) && !isImageCapableModel(parsed.modelId);
       const replayRequest = stripGoogleToolProgressHistory(parsed, returnsThoughtSummaries);
       // AI Studio's `-tiered` spelling is wire-only; CCA aliases may migrate to another generation.
@@ -1042,6 +1057,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         stripRejectedClaudeSdkParagraph,
         isCloudCodeAssist,
         provider.googleMode === "vertex" && parsed.modelId === "gemini-4-argon",
+        isCloudCodeAssist && /^claude-/i.test(routedModelId),
       );
       lastInjectedCallIds = [...replayedCallIds];
       lastReasoningReplayScope = parsed._reasoningReplayScope;
@@ -1068,15 +1084,19 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       // current behavior; Vertex participates only through an explicitly configured ladder (the
       // seed google-vertex entry ships none). Image models are excluded — thinkingConfig would
       // suppress the responseModalities fallback below. CCA maps effort on its envelope path.
-      const thinkingEligible = provider.googleMode !== "cloud-code-assist"
-        && !isImageCapableModel(parsed.modelId)
-        && (configuredReasoningEfforts(provider, parsed.modelId) !== undefined
-          || (provider.googleMode !== "vertex"
-            && (parsed.modelId === "gemini-3.5-flash" || parsed.modelId === "gemini-3.6-flash")));
       const thinkingLevel = thinkingEligible
         ? mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning)
         : undefined;
-      if (thinkingLevel) generationConfig.thinkingConfig = { thinkingLevel };
+      const includeThoughts = thinkingEligible
+        && provider.showThinkingSummary === true
+        && parsed.options.hideThinkingSummary !== true
+        && /^gemini-/.test(routedModelId);
+      if (thinkingLevel || includeThoughts) {
+        generationConfig.thinkingConfig = {
+          ...(thinkingLevel ? { thinkingLevel } : {}),
+          ...(includeThoughts ? { includeThoughts: true } : {}),
+        };
+      }
       if (!generationConfig.thinkingConfig && isImageCapableModel(parsed.modelId)) {
         generationConfig.responseModalities = ["TEXT", "IMAGE"];
       }
@@ -1209,7 +1229,16 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         reportToolSchemaLoss(compiled.toolSchemaLossReport);
         restoreGoogleToolName = compiled.restoreToolName;
         const apiKey = resolveVertexApiKey(provider.apiKey);
-        const vertexEndpoint = selectVertexEndpoint(provider, Boolean(apiKey));
+        let vertexEndpoint = selectVertexEndpoint(provider, Boolean(apiKey));
+        if (apiKey && vertexEndpoint.kind === "project" && vertexEndpoint.project === VERTEX_PROJECT_AUTO) {
+          // Unresolved keys use express for this request so Google's status drives key failover.
+          const project = await resolveVertexApiKeyProject(apiKey, {
+            signal: incoming?.abortSignal,
+            provider,
+            providerName: incoming?.providerName,
+          });
+          vertexEndpoint = project ? { ...vertexEndpoint, project } : { kind: "express" };
+        }
         const url = vertexInferenceUrl(vertexEndpoint, parsed.modelId, method, streamParam);
         vertexReplayModel = vertexReplayModelKey(vertexEndpoint, parsed.modelId);
         vertexReplaySession = vertexReplaySessionId(parsed);
@@ -1278,9 +1307,23 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      const budgetEncoder = new TextEncoder();
       let buffer = "";
       let bufferBytes = 0;
+      const appendDecoded = (fragment: string): void => {
+        if (!fragment) return;
+        // TextDecoder emits complete code points, so only new text needs UTF-8 measurement.
+        const nextBytes = bufferBytes + Buffer.byteLength(fragment);
+        const reservation = budget.reserveTransient(nextBytes, { kind: "live_transient" });
+        try {
+          buffer += fragment;
+          reservation.commitRetained();
+        } catch (error) {
+          reservation.release();
+          throw error;
+        }
+        budget.releaseRetained(bufferBytes, { kind: "live_transient" });
+        bufferBytes = nextBytes;
+      };
       let pendingUsage: OcxUsage | undefined;
       let toolCallsStarted = 0;
       let lastFinishReason: string | undefined;
@@ -1473,13 +1516,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          const nextBuffer = buffer + decoder.decode(value, { stream: true });
-          const nextBufferBytes = budgetEncoder.encode(nextBuffer).byteLength;
-          const appendReservation = budget.reserveTransient(nextBufferBytes, { kind: "live_transient" });
-          buffer = nextBuffer;
-          appendReservation.commitRetained();
-          budget.releaseRetained(bufferBytes, { kind: "live_transient" });
-          bufferBytes = nextBufferBytes;
+          const decoded = decoder.decode(value, { stream: true });
+          appendDecoded(decoded);
           // Cap incomplete frames before waiting for a newline — otherwise a single
           // unterminated data: payload can grow without bound.
           if (buffer.length > MAX_SSE_FRAME_BYTES) {
@@ -1488,9 +1526,11 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             return;
           }
 
+          // The retained suffix contains no newline; an unfinished line needs no rescan.
+          if (!decoded.includes("\n")) continue;
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
-          const residualBytes = budgetEncoder.encode(buffer).byteLength;
+          const residualBytes = Buffer.byteLength(buffer);
           const residualReservation = budget.reserveTransient(residualBytes, { kind: "live_transient" });
           residualReservation.commitRetained();
           budget.releaseRetained(bufferBytes, { kind: "live_transient" });
@@ -1511,7 +1551,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           }
           if (sawLiveness && !sawContentEvent) yield { type: "heartbeat" };
         }
-        buffer += decoder.decode();
+        appendDecoded(decoder.decode());
         if (buffer.trim().length > 0) {
           const residual = buffer.trim();
           if (residual.startsWith(":")) {

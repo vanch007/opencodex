@@ -36,6 +36,7 @@ both `--adapter` and `--base-url`.
 | `resets` | `--limit <n>`, `--json` | List recently detected quota-window resets. |
 | `presets` | `--json` | List dashboard provider presets. |
 | `account-mode` | `pool`, `direct`, `--json` | Select pooled or direct Codex account routing. |
+| `import-cc-switch` | `--source <FILE>`, `--provider <id>`, `--apply`, `--restore`, `--allow-private-network`, `--json` | Preview, selectively apply, or restore keyless provider entries from a CC-Switch SQLite database (`cc-switch.db`) or legacy JSON file. |
 
 ```bash
 ocx provider list --json
@@ -53,6 +54,13 @@ ocx models live --provider ark --json
 `registryCount` summary from `--json`. Each object has the same fields as an item in the `configured` array.
 Use it for scripts that process one configured provider object per line.
 `--json` and `--jsonl` cannot be combined.
+
+Each configured row also has `active`. It is `false` when this device is linked to a Home
+(a Remote Link Child or a Hub-mode client): the row is local configuration that the Home's
+providers shadow, so it does not serve requests while the link is connected. It is `true` when the
+row actually serves, including when the link state cannot be read. Rows never carry credential
+values: `baseUrl` drops embedded userinfo and masks credential-shaped query values such as `key`
+or `token`, while keeping ordinary parameters such as `api-version`.
 
 :::caution[Custom headers are not a credential channel]
 `--headers` is for non-secret request metadata — routing hints, tenant or
@@ -212,6 +220,27 @@ be stdin. Each input has a 4 MiB limit and a 30-second read deadline. The combin
 serialized `{baseline,next}` request must also fit 4 MiB. Interactive stdin,
 special files, conflicting flags, invalid fields and unconfirmed removals are
 refused before mutation with exit 2. Input errors never echo the submitted values.
+
+### Keyless CC-Switch provider import
+
+```bash
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db
+ocx stop
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db --provider my-provider --apply
+# Start the proxy in another terminal (or run ocx ensure), then add credentials:
+ocx start
+printf '%s\n' "$API_KEY" | ocx account add-key my-provider
+
+# Separate rollback path (stop the proxy first; removes unedited keyless entries only):
+ocx stop
+ocx provider import-cc-switch --restore
+```
+
+`ocx provider import-cc-switch` projects values **only** from an explicit allowlist of non-secret metadata fields (provider IDs, app types, base URLs, wire dialects, and default models) from a plain regular CC-Switch SQLite database or legacy JSON file. Source and embedded-config bytes are read transiently to scan the input, while secret fields, free-text display names, and TOML comments are skipped at the byte level, never decoded into strings, written, or logged, and transient byte buffers are zeroed in `finally`. Narrow base-URL path rules (`http(s)://host[:port]` with an empty path or 1–4 lowercase `[a-z0-9._-]` API path segments such as `/v1`, `/api/v1`, or `/compatible-mode/v1`) and identifier/model syntax checks act as defense in depth and reject non-conforming values without echoing them. Source files are opened once with `O_NOFOLLOW | O_NONBLOCK` descriptor verification and deserialized read-only in memory for SQLite without temporary files; SQLite files with multiple hard links (`nlink > 1`) are refused so sidecar checks cannot be bypassed via an alias path, and if a sibling `-wal` or `-journal` file is non-empty, import refuses and asks you to close CC-Switch (or checkpoint the database) and retry. Only import from a trusted local CC-Switch source, and verify every printed ID, model, and `baseUrl` before adding credentials:
+
+- **Preview (default):** requires `--source <FILE>`, writes nothing, and reports discovered, eligible, conflicting, and invalid entries.
+- **Apply (`--apply`):** requires `--source <FILE>` and a stopped proxy (`ocx stop`), and is refused on a Remote Link Child. Repeat `--provider <id>` to import only selected entries, or pass `--allow-private-network` to permit loopback or private-network base URLs. Even without a prior preview, `--apply` prints every imported provider ID, default model, and destination URL before writing keyless provider entries and recording a rollback journal at `$OPENCODEX_HOME/cc-switch-provider-import-journal.json` (`stdout` in text mode, `stderr` in `--json` mode); a second apply is refused while an active journal exists. Verify the printed entries, start the proxy (`ocx start` in another terminal or `ocx ensure`), and add credentials with `printf '%s\n' "$API_KEY" | ocx account add-key <provider>` (piped stdin) or `ocx login <provider>`.
+- **Restore (`--restore`):** separate rollback path (not a continuation of adding credentials) that requires a stopped proxy (`ocx stop`), is refused on a Remote Link Child, and takes no `--source`, `--provider`, or `--allow-private-network`. It inspects `auth.json` read-only at the byte level (failing closed if unreadable or malformed) and removes only providers from the active journal that still match their imported keyless state and are not selected as `defaultProvider` or referenced by routing, combos, fallback policy, OAuth accounts, or API keys.
 
 ## Authentication
 
@@ -470,9 +499,10 @@ reset changes and expires after six hours or at the observed reset, whichever co
 
 An unreadable 5h reading cannot hide a weekly block. Unknown usage does not fabricate a zero, and a missing reading does
 not erase an already measured blocking tuple. A predicted reset time alone does not unlock it.
-While blocked, the minute sweep waits for the latest known blocking reset, then checks owned usage.
-If no future reset is known or a check remains blocked, recovery uses a capped 5/10/20/40/60-minute
-schedule; a longer `Retry-After` also delays profile and token preparation. Only fresh valid usage or authoritative window-absence evidence
+While blocked, recovery checks owned usage metadata on a capped 5/10/20/40/60-minute schedule, so a reset
+redeemed outside opencodex is noticed before the predicted reset; the first check waits five minutes, checks
+stay at least five minutes apart, and the next check is pulled in to the latest known blocking reset. A paused
+or reauthentication-required main receives no checks before its predicted reset. A longer `Retry-After` also delays profile and token preparation. Only fresh valid usage or authoritative window-absence evidence
 can lift the block. In Pool mode, a quota `--refresh` bypasses cache freshness but still honors failed-read pacing;
 a deferred read makes no new diagnostic attempt. Other pause, reauthentication, and upstream limits remain independent.
 
@@ -666,6 +696,13 @@ changes Orca files, or changes the active pool account.
 
 ### `ocx account list [provider] [--json] [--all] [--quota [--refresh]]`
 
+Stored ChatGPT pool accounts remain listable on hosts without a native Codex home, including in the
+dashboard and on account refresh. Listing does not create a Codex home or sign out the native main
+account. Disabling the Codex client integration does not disable an existing native login's quota
+observation; invalid explicit `CODEX_HOME` paths still report a configuration error. Unsafe
+`OPENCODEX_HOME` storage reports an error even when the native Codex home is missing.
+Default-home resolution also reports errors for files, dangling links, and parent directories that cannot be traversed.
+
 Without a provider, lists the Codex pool, OAuth accounts, and configured API-key pools. Empty
 providers are skipped unless `--all` is present. With a provider, lists only that credential family.
 Human output uses `PROVIDER TYPE ID PLAN/LABEL PRIORITY STATUS`; a manually chosen Codex row is marked
@@ -682,6 +719,14 @@ returns:
 ```text
 { accounts: AccountRow[], notes: string[] }
 ```
+
+Codex JSON rows include `slotId` (the registered `id`) and `slotKind` (`native-main` or
+`pool`). When the proxy can verify both the upstream account and user identity, it also
+includes `upstreamAccountKey` (`uai1_` followed by 64 lowercase hexadecimal characters).
+Equal keys within the `openai` provider identify slots for the same upstream user; keep
+each slot and its quota state separately. The key is local to this installation and can
+change when its administrator token rotates. If it is absent, do not infer a match from
+masked email or quota values. Raw upstream IDs, user claims and credentials are not listed.
 
 An empty provider listing names the next command in human output and JSON `notes`:
 `ocx account login <provider>` for OAuth/Codex, or `ocx account add-key <provider>`
@@ -764,6 +809,8 @@ separately billed sends add to the request spend. Credits are never estimated fr
 With two or more Kiro accounts logged in, request-rate, confirmed monthly-quota, and
 confirmed suspension refusals can rotate before output. Monthly exhaustion excludes only
 that login until reset or evidence expiry; completed service clears an older verdict.
+Quota refusals include the exact `MONTHLY_REQUEST_COUNT` and `OVERAGE_REQUEST_LIMIT_EXCEEDED`
+reasons on HTTP 400 or 429. Plans allowing overage can keep serving after the monthly gauge reaches 100%.
 Reactive rotation remains available when proactive account preference is off. Accounts are added one at a time —
 `ocx account login kiro` hands off to the Kiro CLI and appends the new account to the pool. In the dashboard, Login and Add account also offer Builder ID, Google, and GitHub device login alongside the Kiro CLI choice; native device login adds an account without signing the CLI out.
 Users of one organization (IAM Identity Center) profile share its profile ARN, so a Kiro CLI account is identified by that profile together with the email `kiro-cli whoami` reports for the session. Two users of the same organization therefore stay separate accounts, and signing the same user in again updates that user's account. When `kiro-cli whoami` reports no user, the profile alone identifies the account as before. If that profile already has an account with a known user, such a login only refreshes the account whose stored Kiro CLI session it continues; any other login is refused instead of replacing an account, and an Add account login switches the Kiro CLI back to its previous session. Run `kiro-cli whoami` to confirm the signed-in user, then retry. Reauthenticating an account saved before its user was known records the user that signs in, unless that user already has another account of the same profile.
