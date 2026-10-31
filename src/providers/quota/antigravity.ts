@@ -361,6 +361,40 @@ export async function fetchAntigravityUsageQuota(accessToken: string, projectId:
   return null;
 }
 
+/**
+ * Probes Antigravity account quota with automatic token-refresh self-healing.
+ * If upstream returns access_denied and the account has a refresh_token,
+ * attempts token refresh and updates store before giving up.
+ */
+export async function probeAntigravityAccountQuota(
+  accountId: string,
+  token: string,
+  credential: { access: string; refresh?: string; projectId?: string; [key: string]: unknown },
+  signal?: AbortSignal,
+): Promise<AntigravityQuotaProbeResult> {
+  const projectId = credential.projectId;
+  if (!projectId) return unavailableAntigravityQuota("account_unavailable");
+
+  let result = await probeAntigravityUsageQuota(token, projectId, signal);
+  if (result.kind === "unavailable" && result.failure === "access_denied" && credential.refresh) {
+    try {
+      const { refreshAntigravityToken } = await import("../../oauth/google-antigravity");
+      const { mergeAccountCredential } = await import("../../oauth/store");
+      const fresh = await refreshAntigravityToken(credential.refresh);
+      await mergeAccountCredential("google-antigravity", accountId, {
+        ...credential,
+        access: fresh.access,
+        refresh: fresh.refresh || credential.refresh,
+        expires: fresh.expires,
+      } as any);
+      result = await probeAntigravityUsageQuota(fresh.access, projectId, signal);
+    } catch {
+      // Refresh failed, keep original access_denied
+    }
+  }
+  return result;
+}
+
 /** Every store read uses `provider`, the same key inference resolves, so a row never probes another row's account. */
 export async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaReport | null> {
   const credential = getCredential(provider);

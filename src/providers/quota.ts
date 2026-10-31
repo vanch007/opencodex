@@ -69,7 +69,7 @@ import {
   fetchXaiQuota,
 } from "./quota/vendor-probes-oauth";
 import { fetchCommandCodeQuota, fetchKimiQuota, keyQuotaReaderForProvider } from "./quota/vendor-probes-key";
-import { antigravityQuotaDiagnosticIdentity, fetchAntigravityQuota, probeAntigravityUsageQuota } from "./quota/antigravity";
+import { antigravityQuotaDiagnosticIdentity, fetchAntigravityQuota, probeAntigravityAccountQuota } from "./quota/antigravity";
 import { persistKiroAccountState } from "./kiro-account-state-disk";
 import { kiroProbeCurrent, kiroProbeIdentity } from "./quota/kiro-account-probe";
 export type { ProviderQuota, ProviderQuotaCreditsUsd, ProviderQuotaWindow } from "./quota-types";
@@ -495,7 +495,7 @@ async function fetchAccountQuota(
           const credential = getAccountCredential(provider, accountId);
           diagnosticIdentity = credential?.access === token ? antigravityQuotaDiagnosticIdentity(accountId, credential) : undefined;
           if (!diagnosticIdentity || !credential?.projectId) throw new Error("antigravity account unavailable");
-          const result = await probeAntigravityUsageQuota(token, credential.projectId);
+          const result = await probeAntigravityAccountQuota(accountId, token, credential);
           quota = result.kind === "available" ? result.quota : null;
           if (result.kind === "unavailable") quotaFailure = result.failure;
         } else {

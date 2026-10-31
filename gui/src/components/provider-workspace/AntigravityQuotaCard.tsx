@@ -189,7 +189,24 @@ export function AntigravityQuotaCard({ quota, pending }: AntigravityQuotaCardPro
         {hasArgon && (
           <div className="ag-quota-col">
             <div className="ag-quota-col-title">Argon</div>
-            {renderQuotaWindow(argon5h)}
+            {argon5hRaw ? (
+              renderQuotaWindow(argon5h)
+            ) : (
+              <div className="ag-quota-window">
+                <div className="ag-quota-head">
+                  <span className="ag-quota-label">5h</span>
+                  <span className="ag-quota-pct" style={{ color: "var(--text-tertiary)", fontSize: 11 }}>
+                    不限
+                  </span>
+                </div>
+                <div className="ag-quota-bar-track">
+                  <div
+                    className="ag-quota-bar-fill ag-quota-bar-fill--healthy"
+                    style={{ width: "100%", opacity: 0.35 }}
+                  />
+                </div>
+              </div>
+            )}
             {renderQuotaWindow(argonWeekly)}
           </div>
         )}
