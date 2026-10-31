@@ -245,6 +245,7 @@ export const tr: Record<TKey, string> = {
   "codexAuth.quotaAutoRefreshPartial": "Bazı ayarlar kaydedilemedi. Aynı değişikliği tamamlamak için yeniden deneyin.",
   // sidebar / nav / common
   "nav.dashboard": "Gösterge Paneli",
+  "nav.accounts": "Hesaplar",
   "uptime.day": " gün",
   "uptime.hour": " saat",
   "uptime.minute": " dk",

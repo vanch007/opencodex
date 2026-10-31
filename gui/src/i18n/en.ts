@@ -246,6 +246,7 @@ export const en = {
   "codexAuth.quotaAutoRefreshPartial": "Some settings could not be saved. Retry to finish the same change.",
   // sidebar / nav / common
   "nav.dashboard": "Dashboard",
+  "nav.accounts": "Accounts",
   "uptime.day": "d",
   "uptime.hour": "h",
   "uptime.minute": "m",

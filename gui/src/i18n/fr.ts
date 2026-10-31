@@ -243,6 +243,7 @@ export const fr: Record<TKey, string> = {
   "codexAuth.quotaAutoRefreshLoadFailed": "Impossible de charger les paramètres d’activation. Réessayez.",
   "codexAuth.quotaAutoRefreshPartial": "Certains paramètres n’ont pas pu être enregistrés. Réessayez pour terminer la même modification.",
   "nav.dashboard": "Tableau de bord",
+  "nav.accounts": "Comptes",
   "uptime.day": "j",
   "uptime.hour": "h",
   "uptime.minute": "min",

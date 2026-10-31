@@ -244,6 +244,7 @@ export const ja: Record<TKey, string> = {
   "codexAuth.quotaAutoRefreshPartial": "一部の設定を保存できませんでした。再試行で同じ変更を完了します。",
   // sidebar / nav / common
   "nav.dashboard": "ダッシュボード",
+  "nav.accounts": "アカウント",
   "uptime.day": "日",
   "uptime.hour": "時間",
   "uptime.minute": "分",

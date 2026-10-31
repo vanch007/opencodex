@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { useKeyedClientResource } from "./client-resource";
 import Dashboard from "./pages/Dashboard";
+import Accounts from "./pages/Accounts";
 import Providers from "./pages/Providers";
 import Models from "./pages/Models";
 import Advisor from "./pages/Advisor";
@@ -45,6 +46,7 @@ type Theme = ThemeMode;
 
 const PAGE_TKEY: Record<Page, TKey> = {
   dashboard: "nav.dashboard",
+  accounts: "nav.accounts",
   startup: "nav.startup",
   providers: "nav.providers",
   models: "nav.models",
@@ -625,6 +627,7 @@ export default function App() {
                 )}
                 {page === "dashboard" && <Dashboard apiBase={sharedBase} readOnly={targets.link !== undefined} connected={targets.connected}
                   authenticationPending={targets.connected && !sharedSessionReady} refreshEpoch={sharedSessionEpoch} />}
+                {page === "accounts" && <Accounts apiBase={sharedBase} />}
                 {page === "startup" && <Startup apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}
                 {page === "providers" && <Providers apiBase={sharedBase} />}
                 {page === "models" && <Models key={sharedBase} apiBase={sharedBase} restartEpoch={codexRestartEpoch} connected={targets.connected} catalogSyncedAt={targets.catalogSyncedAt} reportRestart={report} />}

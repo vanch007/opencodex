@@ -244,6 +244,7 @@ export const vi: Record<TKey, string> = {
   "codexAuth.quotaAutoRefreshLoadFailed": "Không thể tải các cài đặt kích hoạt. Hãy thử lại để kiểm tra trạng thái của chúng.",
   "codexAuth.quotaAutoRefreshPartial": "Không thể lưu một số cài đặt. Hãy thử lại để hoàn tất cùng một thay đổi.",
   "nav.dashboard": "Bảng điều khiển",
+  "nav.accounts": "Tài khoản",
   "uptime.day": "ng",
   "uptime.hour": "g",
   "uptime.minute": "p",

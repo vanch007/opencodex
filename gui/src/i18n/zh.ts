@@ -244,6 +244,7 @@ export const zh: Record<TKey, string> = {
   "codexAuth.quotaAutoRefreshPartial": "部分设置未能保存。重试将完成同一项更改。",
   // sidebar / nav / common
   "nav.dashboard": "仪表盘",
+  "nav.accounts": "账号配额",
   "uptime.day": "天",
   "uptime.hour": "小时",
   "uptime.minute": "分钟",

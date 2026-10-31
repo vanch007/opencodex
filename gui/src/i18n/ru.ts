@@ -244,6 +244,7 @@ export const ru: Record<TKey, string> = {
   "codexAuth.quotaAutoRefreshPartial": "Не удалось сохранить часть настроек. Повторите попытку для завершения того же изменения.",
   // sidebar / nav / common
   "nav.dashboard": "Дашборд",
+  "nav.accounts": "Аккаунты",
   "uptime.day": "д",
   "uptime.hour": "ч",
   "uptime.minute": "мин",

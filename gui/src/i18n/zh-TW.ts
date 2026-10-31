@@ -241,6 +241,7 @@ export const zhTW: Record<TKey, string> = {
   "codexAuth.quotaAutoRefreshLoadFailed": "無法載入自動啟用設定。請重試。",
   "codexAuth.quotaAutoRefreshPartial": "部分設定未能儲存。重試將完成同一項變更。",
   "nav.dashboard": "儀表板",
+  "nav.accounts": "帳號配額",
   "nav.startup": "啟動安全",
   "nav.providers": "供應商",
   "nav.models": "模型",

@@ -244,6 +244,7 @@ export const de: Record<TKey, string> = {
   "codexAuth.quotaAutoRefreshLoadFailed": "Die Aktivierungseinstellungen konnten nicht geladen werden. Bitte erneut versuchen.",
   "codexAuth.quotaAutoRefreshPartial": "Einige Einstellungen konnten nicht gespeichert werden. Erneut versuchen, um dieselbe Änderung abzuschließen.",
   "nav.dashboard": "Übersicht",
+  "nav.accounts": "Konten",
   "uptime.day": "T",
   "uptime.hour": "Std",
   "uptime.minute": "Min",
