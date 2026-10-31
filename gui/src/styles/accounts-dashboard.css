@@ -1,13 +1,28 @@
 /* ── Cockpit-style Top-level Accounts & Quota Dashboard ── */
 
+.main-inner:has(.cockpit-accounts-page) {
+  max-width: 1720px;
+  width: 100%;
+  padding: 24px 28px 60px;
+  box-sizing: border-box;
+}
+
+@media (max-width: 900px) {
+  .main-inner:has(.cockpit-accounts-page) {
+    padding: 16px 14px 48px;
+  }
+}
+
 .cockpit-accounts-page {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 8px 4px 40px;
+  padding: 0;
   width: 100%;
-  max-width: 1680px;
+  max-width: 100%;
   margin: 0 auto;
+  box-sizing: border-box;
+  min-width: 0;
 }
 
 /* ── Top Header ── */
@@ -82,9 +97,10 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
   position: relative;
   flex-wrap: wrap;
+  width: 100%;
 }
 
 .cockpit-provider-tabs {
@@ -95,6 +111,15 @@
   border-radius: 14px;
   border: 1px solid light-dark(#e2e8f0, #2f3239);
   gap: 4px;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  flex-shrink: 0;
+}
+
+.cockpit-provider-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .cockpit-provider-tab {
@@ -110,6 +135,8 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
   transition: all 0.15s ease;
 }
 
@@ -132,38 +159,6 @@
   color: inherit;
 }
 
-.cockpit-dropdown-item {
-  appearance: none;
-  border: none;
-  background: transparent;
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 600;
-  padding: 8px 12px;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-
-.cockpit-dropdown-item:hover { background: light-dark(#f1f5f9, #2b2e36); }
-
-.cockpit-dropdown-item.active {
-  background: light-dark(#eff6ff, #1e293b);
-  color: #3b82f6;
-  font-weight: 700;
-}
-
-.cockpit-provider-tab-badge {
-  font-size: 11px;
-  padding: 1px 7px;
-  border-radius: 9999px;
-  background: light-dark(#e2e8f0, #3a3d46);
-  color: inherit;
-}
-
 /* Centered Navigation Pills */
 .cockpit-nav-pills {
   display: inline-flex;
@@ -173,7 +168,16 @@
   border-radius: 14px;
   border: 1px solid light-dark(#e2e8f0, #2f3239);
   gap: 4px;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  flex-shrink: 0;
   margin: 0 auto;
+}
+
+.cockpit-nav-pills::-webkit-scrollbar {
+  display: none;
 }
 
 .cockpit-nav-pill {
@@ -189,6 +193,8 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
   transition: all 0.15s ease;
 }
 
@@ -213,14 +219,16 @@
   border: 1px solid light-dark(#e2e8f0, #2f3239);
   flex-wrap: wrap;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .cockpit-toolbar-left {
   display: flex;
   align-items: center;
   gap: 10px;
-  flex: 1;
-  min-width: 280px;
+  flex: 1 1 auto;
+  min-width: 0;
   flex-wrap: wrap;
 }
 
@@ -232,8 +240,9 @@
   border: 1px solid light-dark(#e2e8f0, #363942);
   border-radius: 10px;
   padding: 6px 12px;
-  min-width: 200px;
+  min-width: 160px;
   max-width: 280px;
+  flex: 1 1 180px;
 }
 
 .cockpit-search-input {
@@ -295,6 +304,8 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  flex-shrink: 0;
+  margin-left: auto;
 }
 
 .cockpit-round-btn {
@@ -370,35 +381,13 @@
   user-select: none;
 }
 
-/* ── Cards Grid (4 Columns on Desktop) ── */
+/* ── Cards Grid (Fluid Responsive Auto-fill) ── */
 .cockpit-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr));
   gap: 16px;
-}
-
-@media (min-width: 1360px) {
-  .cockpit-grid {
-    grid-template-columns: repeat(4, 1fr);
-  }
-}
-
-@media (max-width: 1359px) and (min-width: 1020px) {
-  .cockpit-grid {
-    grid-template-columns: repeat(3, 1fr);
-  }
-}
-
-@media (max-width: 1019px) and (min-width: 680px) {
-  .cockpit-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
-
-@media (max-width: 679px) {
-  .cockpit-grid {
-    grid-template-columns: 1fr;
-  }
+  width: 100%;
+  box-sizing: border-box;
 }
 
 /* ── Cockpit Account Card ── */
@@ -413,6 +402,9 @@
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
   transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
   position: relative;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
 .cockpit-card:hover {
@@ -681,7 +673,8 @@
   background: light-dark(#ffffff, #1e1f23);
   border: 1px solid light-dark(#e2e8f0, #2f3239);
   border-radius: 14px;
-  overflow: hidden;
+  overflow-x: auto;
+  max-width: 100%;
 }
 
 .cockpit-table {
