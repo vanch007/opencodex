@@ -16,7 +16,10 @@ import {
   rotateAntigravityAccountOnAuthRefusal,
   rotateGenericOAuthAccountOn429,
   routeAntigravityModel,
+  resolveExplicitModelAccountRoute,
 } from "../../../src/oauth/generic-account-failover";
+import { genericSessionAccountEligible } from "../../../src/oauth/generic-session-affinity";
+import { setCachedProviderAccountQuotaForTests, clearAccountQuotaCache } from "../../../src/providers/quota";
 import {
   ANTIGRAVITY_ACCOUNT_ROSTER_TTL_MS,
   antigravityAccountRosterModelIds,
@@ -295,5 +298,58 @@ describe("model routing fails closed on a proven roster omission (#7500)", () =>
     clearAntigravityAccountRosters(PROVIDER, "acct-55");
     record("acct-55", ROSTER_46);
     expect(rotateAntigravityAccountOnAuthRefusal(true, "acct-a", "stale-generation", "claude-opus-5-5")).toBeNull();
+  });
+
+  test("modelAccountRoutes routes exclusive models directly to designated account", () => {
+    homeWithAccounts(["acct-flash", "acct-target"], "acct-flash");
+    const cfg = {
+      providers: {
+        [PROVIDER]: provider({
+          oauthAccountFailover: {
+            enabled: true,
+            modelAccountRoutes: {
+              "gemini-4-argon": "acct-target",
+              "claude-opus-5-5": "acct-target",
+              "claude-sonnet-5-5": "acct-target",
+            },
+          },
+        }),
+      },
+    } as unknown as OcxConfig;
+
+    expect(resolveExplicitModelAccountRoute(cfg, PROVIDER, "gemini-4-argon")).toBe("acct-target");
+    expect(resolveExplicitModelAccountRoute(cfg, PROVIDER, "gemini-4-argon-medium")).toBe("acct-target");
+    expect(routeAntigravityModel(cfg, PROVIDER, "acct-flash", "gemini-4-argon"))
+      .toEqual({ kind: "reroute", accountId: "acct-target" });
+    expect(routeAntigravityModel(cfg, PROVIDER, "acct-target", "gemini-4-argon"))
+      .toEqual({ kind: "keep" });
+    expect(genericSessionAccountEligible(cfg, PROVIDER, "acct-flash", "gemini-4-argon")).toBe(false);
+    expect(genericSessionAccountEligible(cfg, PROVIDER, "acct-target", "gemini-4-argon")).toBe(true);
+  });
+
+  test("quota cache with Argon window enables Argon and Claude 5.5 for account when roster is not yet recorded", () => {
+    homeWithAccounts(["acct-flash", "acct-argon"], "acct-flash");
+    setCachedProviderAccountQuotaForTests(PROVIDER, "acct-flash", {
+      customWindows: [
+        { label: "Gem", percent: 10, resetAt: Date.now() + 3600000 },
+        { label: "Cla", percent: 10, resetAt: Date.now() + 3600000 },
+      ],
+      updatedAt: Date.now(),
+    });
+    setCachedProviderAccountQuotaForTests(PROVIDER, "acct-argon", {
+      customWindows: [
+        { label: "Gem", percent: 10, resetAt: Date.now() + 3600000 },
+        { label: "Argon (Weekly)", modelId: "gemini-4-argon", percent: 10, resetAt: Date.now() + 3600000 },
+      ],
+      updatedAt: Date.now(),
+    });
+
+    expect(antigravityAccountSupportsModel(PROVIDER, "acct-flash", "gemini-4-argon")).toBe(false);
+    expect(antigravityAccountSupportsModel(PROVIDER, "acct-argon", "gemini-4-argon")).toBe(true);
+    expect(antigravityAccountSupportsModel(PROVIDER, "acct-argon", "claude-opus-5-5")).toBe(true);
+    expect(antigravityAccountSupportsModel(PROVIDER, "acct-argon", "claude-sonnet-5-5")).toBe(true);
+    expect(routeAntigravityModel(config(true), PROVIDER, "acct-flash", "gemini-4-argon"))
+      .toEqual({ kind: "reroute", accountId: "acct-argon" });
+    clearAccountQuotaCache(PROVIDER);
   });
 });

@@ -23,10 +23,14 @@ export function markAntigravityModelNotFound(response: Response, requestBody: st
   const resourceInfo = details.filter((detail): detail is Record<string, unknown> =>
     detail !== null && typeof detail === "object" && !Array.isArray(detail)
     && detail["@type"] === "type.googleapis.com/google.rpc.ResourceInfo");
-  // No observed model-specific message form is known: prose alone cannot identify the missing resource.
-  if (!resourceInfo.length || resourceInfo.some(detail => detail.resourceName !== `models/${model}`
-    || (detail.resourceType !== undefined && (typeof detail.resourceType !== "string"
-      || !/(?:^|[./])models?$/i.test(detail.resourceType))))) return;
+  if (resourceInfo.length > 0) {
+    if (resourceInfo.some(detail => detail.resourceName !== `models/${model}`
+      || (detail.resourceType !== undefined && (typeof detail.resourceType !== "string"
+        || !/(?:^|[./])models?$/i.test(detail.resourceType))))) return;
+  } else {
+    // Upstream Cloud Code Assist returns generic "Requested entity was not found." with no details when an account lacks model entitlement
+    if (error.message !== "Requested entity was not found." || details.length > 0) return;
+  }
   modelNotFoundResponses.set(response, true);
 }
 

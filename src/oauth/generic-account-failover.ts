@@ -44,6 +44,7 @@ import { kiroAccountEvidence } from "../providers/kiro-usage";
 import { kiroEvidenceIdentity } from "../providers/kiro-account-state-disk";
 import { kiroAccountSupportsModel } from "../providers/kiro-model-catalog";
 import { antigravityAccountSupportsModel } from "../providers/antigravity-account-roster";
+import { canonicalAntigravityUsageModel, isAntigravityExclusiveTierModel } from "../providers/antigravity-models";
 import { ACCOUNT_QUOTA_TTL_MS } from "../providers/quota-wire";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { subscribeOAuthAccountPauseChanges } from "../lib/account-selection-events";
@@ -251,6 +252,37 @@ export function eligibleFailoverAccounts(providerName: string, now = Date.now(),
   return eligibleIdsIn(getAccountSet(providerName), providerName, now, family);
 }
 
+/** Resolve an explicit route from requested model ID to target provider account ID. */
+export function resolveExplicitModelAccountRoute(
+  config: OcxConfig,
+  provider: string,
+  model?: string | null,
+): string | null {
+  if (!model) return null;
+  const routes = config.providers[provider]?.oauthAccountFailover?.modelAccountRoutes;
+  if (!routes || typeof routes !== "object") return null;
+  const trimmed = model.trim();
+  const canonical = canonicalAntigravityUsageModel(trimmed);
+  const candidateKeys = [model, trimmed, canonical, trimmed.toLowerCase(), canonical.toLowerCase()];
+  let target: string | undefined;
+  for (const k of candidateKeys) {
+    if (routes[k]) {
+      target = routes[k];
+      break;
+    }
+  }
+  if (!target) return null;
+  const set = getAccountSet(provider);
+  if (!set) return null;
+  const direct = set.accounts.find(a => a.id === target);
+  if (direct && direct.paused !== true && direct.needsReauth !== true) return direct.id;
+  const byEmail = set.accounts.find(a => a.credential?.email?.toLowerCase() === target!.toLowerCase());
+  if (byEmail && byEmail.paused !== true && byEmail.needsReauth !== true) return byEmail.id;
+  const byAlias = set.accounts.find(a => (a as { alias?: string }).alias?.toLowerCase() === target!.toLowerCase());
+  if (byAlias && byAlias.paused !== true && byAlias.needsReauth !== true) return byAlias.id;
+  return null;
+}
+
 /** Whether an account's own model listing includes `model`; undefined when unknown. */
 function accountListsModel(providerName: string, accountId: string, model: string): boolean | undefined {
   if (providerName === "kiro") return kiroAccountSupportsModel(accountId, model);
@@ -273,6 +305,10 @@ export function preferKiroModelSupport(
 ): string[] {
   if (!model) return ids;
   if (providerName === "google-antigravity") {
+    if (config) {
+      const explicit = resolveExplicitModelAccountRoute(config, providerName, model);
+      if (explicit && ids.includes(explicit)) return [explicit];
+    }
     const positive = ids.filter(id => accountListsModel(providerName, id, model) === true);
     if (positive.length) return positive;
     return ids.filter(id => accountListsModel(providerName, id, model) !== false);
@@ -327,8 +363,14 @@ export function routeAntigravityModel(
   model: string | null | undefined,
   now = Date.now(),
 ): AntigravityModelRoute {
-  if (providerName !== "google-antigravity" || !model || !plannedAccountId
-    || accountListsModel(providerName, plannedAccountId, model) !== false) return KEEP_ANTIGRAVITY_ROUTE;
+  if (providerName !== "google-antigravity" || !model || !plannedAccountId) return KEEP_ANTIGRAVITY_ROUTE;
+  const explicitRoute = resolveExplicitModelAccountRoute(config, providerName, model);
+  if (explicitRoute) {
+    if (plannedAccountId === explicitRoute) return KEEP_ANTIGRAVITY_ROUTE;
+    return { kind: "reroute", accountId: explicitRoute };
+  }
+  if (accountListsModel(providerName, plannedAccountId, model) !== false) return KEEP_ANTIGRAVITY_ROUTE;
+
   const serving = (getAccountSet(providerName)?.accounts ?? [])
     .filter(account => account.id !== plannedAccountId && account.paused !== true && account.needsReauth !== true)
     .map(account => account.id)
@@ -835,9 +877,15 @@ export function preferredInitialAccount(
   const modelEligible = preferKiroModelSupport(providerName,
     eligibleFailoverAccounts(providerName, now, classifyModelFamilyForQuota(providerName, requestedModelId)),
     requestedModelId, config);
+  const explicitModel = resolveExplicitModelAccountRoute(config, providerName, requestedModelId);
+  if (explicitModel && modelEligible.includes(explicitModel)) {
+    return explicitModel !== active ? explicitModel : null;
+  }
   const activeLacks = (providerName === "kiro" || providerName === "google-antigravity")
     && !!active && !!requestedModelId
-    && accountListsModel(providerName, active, requestedModelId) === false;
+    && (isAntigravityExclusiveTierModel(requestedModelId)
+      ? accountListsModel(providerName, active, requestedModelId) !== true
+      : accountListsModel(providerName, active, requestedModelId) === false);
   if (providerName === "google-antigravity" && activeLacks) {
     const route = routeAntigravityModel(config, providerName, active, requestedModelId, now);
     return route.kind === "reroute" ? route.accountId : null;

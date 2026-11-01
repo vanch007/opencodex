@@ -871,3 +871,14 @@ export function canonicalAntigravityUsageModel(modelId: string): string {
   if (!id) return modelId;
   return ANTIGRAVITY_USAGE_BASE_BY_ID[id] ?? id;
 }
+
+/**
+ * Whether this model belongs to an Antigravity Ultra/Enterprise exclusive tier family
+ * (Gemini 4 Argon, Claude Opus 5.5, Claude Sonnet 5.5).
+ */
+export function isAntigravityExclusiveTierModel(modelId: string | null | undefined): boolean {
+  if (!modelId) return false;
+  const id = modelId.trim();
+  const canonical = canonicalAntigravityUsageModel(Object.hasOwn(ANTIGRAVITY_MODEL_ALIASES, id) ? ANTIGRAVITY_MODEL_ALIASES[id]! : id);
+  return canonical === "gemini-4-argon" || canonical === "claude-opus-5-5" || canonical === "claude-sonnet-5-5";
+}

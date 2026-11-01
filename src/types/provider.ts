@@ -788,6 +788,11 @@ export interface OcxProviderConfig {
      * to target provider OAuth account ID, email, or alias.
      */
     codexAccountRoutes?: Record<string, string>;
+    /**
+     * Optional static routing map from requested model ID (e.g. "gemini-4-argon", "claude-opus-5-5")
+     * to target provider OAuth account ID, email, or alias.
+     */
+    modelAccountRoutes?: Record<string, string>;
   };
   /** Allow an explicitly key/oauth provider to run without a credential (for keyless local proxies). */
   keyOptional?: boolean;

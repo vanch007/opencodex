@@ -1,6 +1,10 @@
 import { getConfigDir } from "../config/paths";
 import { credentialGeneration, getAccountCredentialWithStatus } from "../oauth/store";
-import { ANTIGRAVITY_MODEL_ALIASES, canonicalAntigravityUsageModel, type AntigravityAvailableModel } from "./antigravity-models";
+import { ANTIGRAVITY_MODEL_ALIASES, canonicalAntigravityUsageModel, isAntigravityExclusiveTierModel, type AntigravityAvailableModel } from "./antigravity-models";
+import { getCachedProviderAccountQuota } from "./quota";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
+import { atomicWriteFile } from "../config/atomic-write";
 
 /**
  * Per-account Antigravity model rosters, taken from each account's own live
@@ -110,10 +114,58 @@ export function recordAntigravityAccountRoster(
     const denial = denials?.get(key);
     if (denial && denial.order <= observation.order) denials!.delete(key);
   }
+  persistRosters();
+}
+
+const ROSTER_FILENAME = "antigravity-account-rosters.json";
+
+function persistRosters(): void {
+  try {
+    const dir = getConfigDir();
+    const rows: Record<string, { ids: string[]; modelIds: string[]; observedAt: number; generation?: string; order: number }> = {};
+    for (const [k, r] of rosters) {
+      rows[k] = {
+        ids: [...r.ids],
+        modelIds: [...r.modelIds],
+        observedAt: r.observedAt,
+        generation: r.generation,
+        order: r.order,
+      };
+    }
+    atomicWriteFile(join(dir, ROSTER_FILENAME), JSON.stringify({ version: 1, rows }, null, 2) + "\n");
+  } catch {}
+}
+
+function loadPersistedRosters(): void {
+  try {
+    const p = join(getConfigDir(), ROSTER_FILENAME);
+    if (!existsSync(p)) return;
+    const data = JSON.parse(readFileSync(p, "utf8")) as {
+      version?: number;
+      rows?: Record<string, { ids: string[]; modelIds: string[]; observedAt: number; generation?: string; order: number }>;
+    };
+    if (!data || data.version !== 1 || !data.rows) return;
+    for (const [k, row] of Object.entries(data.rows)) {
+      if (!rosters.has(k) && Array.isArray(row.ids) && Array.isArray(row.modelIds)) {
+        rosters.set(k, {
+          ids: new Set(row.ids),
+          modelIds: row.modelIds,
+          observedAt: row.observedAt,
+          generation: row.generation,
+          order: row.order ?? 0,
+        });
+      }
+    }
+  } catch {}
 }
 
 function freshRoster(providerName: string, accountId: string, now: number): AccountRoster | undefined {
-  const roster = rosters.get(rosterKey(providerName, accountId));
+  const key = rosterKey(providerName, accountId);
+  let roster = rosters.get(key);
+  if (!roster) {
+    loadPersistedRosters();
+    roster = rosters.get(key);
+  }
   if (!roster || now - roster.observedAt > ANTIGRAVITY_ACCOUNT_ROSTER_TTL_MS
     || roster.generation !== accountGeneration(providerName, accountId)) return undefined;
   return roster;
@@ -148,7 +200,17 @@ export function antigravityAccountSupportsModel(
   if (denial && denial.generation === accountGeneration(providerName, accountId)
     && now - denial.deniedAt <= ANTIGRAVITY_MODEL_DENIAL_TTL_MS
     && (!roster || denial.order >= roster.order)) return false;
-  if (!roster) return undefined;
+  if (!roster) {
+    if (providerName === "google-antigravity" && isAntigravityExclusiveTierModel(id)) {
+      const quota = getCachedProviderAccountQuota(providerName, accountId);
+      if (quota && Array.isArray(quota.customWindows) && quota.customWindows.length > 0) {
+        return quota.customWindows.some(w =>
+          w.label?.toLowerCase().includes("argon") || w.modelId === "gemini-4-argon"
+        );
+      }
+    }
+    return undefined;
+  }
   if (roster.ids.has(id)) return true;
   const canonical = canonicalAntigravityUsageModel(id);
   if (roster.ids.has(canonical)) return true;
@@ -161,8 +223,13 @@ export function clearAntigravityAccountRosters(providerName?: string, accountId?
   if (providerName && accountId) {
     rosters.delete(rosterKey(providerName, accountId));
     modelDenials.delete(rosterKey(providerName, accountId));
+    persistRosters();
     return;
   }
   rosters.clear();
   modelDenials.clear();
+  try {
+    const p = join(getConfigDir(), ROSTER_FILENAME);
+    if (existsSync(p)) unlinkSync(p);
+  } catch {}
 }

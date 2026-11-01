@@ -4,7 +4,7 @@ import { getConfigDir } from "../config/paths";
 import { subscribeAccountSelections } from "../lib/account-selection-events";
 import type { OcxConfig } from "../types";
 import { classifyModelFamilyForQuota } from "./account-quota-rank";
-import { eligibleFailoverAccounts, isGenericFailoverProvider, preferKiroModelSupport, preferredInitialAccount } from "./generic-account-failover";
+import { eligibleFailoverAccounts, isGenericFailoverProvider, preferKiroModelSupport, preferredInitialAccount, resolveExplicitModelAccountRoute } from "./generic-account-failover";
 import type { OAuthAccessSnapshot } from "./index";
 import { captureOAuthAccountSelection, credentialGeneration, getAccountCredentialWithStatus, getAccountSet } from "./store";
 import type { OAuthAccountSelection } from "./types";
@@ -44,6 +44,8 @@ export function genericSessionAffinityEnabled(config: OcxConfig, provider: strin
 export function genericSessionAccountEligible(
   config: OcxConfig, provider: string, accountId: string, model?: string | null, now = Date.now(), allowActiveFallback = false,
 ): boolean {
+  const explicitModel = resolveExplicitModelAccountRoute(config, provider, model);
+  if (explicitModel && accountId !== explicitModel) return false;
   const eligible = eligibleFailoverAccounts(provider, now, classifyModelFamilyForQuota(provider, model));
   // Existing conversation ownership is independent of transient per-account load.
   if (preferKiroModelSupport(provider, eligible, model).includes(accountId)) return true;
@@ -123,6 +125,8 @@ export function preferredGenericSessionAccount(
   if (!genericSessionAffinityEnabled(config, provider)) return null;
   const explicit = resolveExplicitCodexAccountRoute(config, provider, callerIdentity);
   if (explicit && genericSessionAccountEligible(config, provider, explicit, model, now)) return explicit;
+  const explicitModel = resolveExplicitModelAccountRoute(config, provider, model);
+  if (explicitModel && genericSessionAccountEligible(config, provider, explicitModel, model, now)) return explicitModel;
   const bound = genericSessionAccount(config, provider, session, model, now);
   if (bound) return bound;
   const cursor = readBinding(config, provider, cursorKey(provider), model, now);
