@@ -1,5 +1,5 @@
 import { getConfigDir } from "../config/paths";
-import { credentialGeneration, getAccountCredentialWithStatus } from "../oauth/store";
+import { credentialGeneration, getAccountCredentialWithStatus, getAccountSet } from "../oauth/store";
 import { ANTIGRAVITY_MODEL_ALIASES, canonicalAntigravityUsageModel, isAntigravityExclusiveTierModel, type AntigravityAvailableModel } from "./antigravity-models";
 import { getCachedProviderAccountQuota } from "./quota";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
@@ -166,8 +166,7 @@ function freshRoster(providerName: string, accountId: string, now: number): Acco
     loadPersistedRosters();
     roster = rosters.get(key);
   }
-  if (!roster || now - roster.observedAt > ANTIGRAVITY_ACCOUNT_ROSTER_TTL_MS
-    || roster.generation !== accountGeneration(providerName, accountId)) return undefined;
+  if (!roster || now - roster.observedAt > ANTIGRAVITY_ACCOUNT_ROSTER_TTL_MS) return undefined;
   return roster;
 }
 
@@ -215,7 +214,35 @@ export function antigravityAccountSupportsModel(
   const canonical = canonicalAntigravityUsageModel(id);
   if (roster.ids.has(canonical)) return true;
   const alias = Object.hasOwn(ANTIGRAVITY_MODEL_ALIASES, id) ? ANTIGRAVITY_MODEL_ALIASES[id] : undefined;
-  return alias !== undefined && roster.ids.has(alias);
+  if (alias !== undefined && roster.ids.has(alias)) return true;
+  if (providerName === "google-antigravity" && isAntigravityExclusiveTierModel(id)) {
+    const quota = getCachedProviderAccountQuota(providerName, accountId);
+    if (quota && Array.isArray(quota.customWindows) && quota.customWindows.length > 0) {
+      const hasArgon = quota.customWindows.some(w =>
+        w.label?.toLowerCase().includes("argon") || w.modelId === "gemini-4-argon"
+      );
+      if (hasArgon) return true;
+    }
+    return false;
+  }
+  return false;
+}
+
+/** Whether any usable (not paused, not needsReauth) account in the pool supports the model. */
+export function anyUsableAccountSupportsAntigravityModel(
+  providerName: string,
+  modelId: string,
+  now = Date.now(),
+): boolean {
+  if (providerName !== "google-antigravity") return false;
+  const accounts = getAccountSet(providerName)?.accounts ?? [];
+  for (const account of accounts) {
+    if (account.paused || account.needsReauth) continue;
+    if (antigravityAccountSupportsModel(providerName, account.id, modelId, now) === true) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Forget rosters (one account, or all). For account removal and tests. */

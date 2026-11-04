@@ -53,7 +53,7 @@ import {
 import type { FastPolicyAuthority } from "../../providers/fastwire";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport, registryEntryForProviderDestination } from "../../providers/registry";
 import { parseAntigravityAvailableModels, registerAntigravityDiscoveredWireModels } from "../../providers/antigravity-models";
-import { captureAntigravityModelObservation, recordAntigravityAccountRoster } from "../../providers/antigravity-account-roster";
+import { anyUsableAccountSupportsAntigravityModel, captureAntigravityModelObservation, recordAntigravityAccountRoster } from "../../providers/antigravity-account-roster";
 import { discoverAntigravitySiblings } from "./antigravity-discovery";
 import { applyProviderContextCap, providerContextCap, resolveUnknownRoutedContextWindow } from "../../providers/context-cap";
 import { clampAutoCompactTokenLimit } from "../../providers/auto-compact-budget";
@@ -806,6 +806,32 @@ export async function fetchProviderModelsWithAuth(
         return observed(withConfiguredRetention(configured), "degraded");
       const byId = new Map(antigravity.map(model => [model.id, model]));
       for (const model of admitSiblings()) if (!byId.has(model.id)) byId.set(model.id, model);
+      if (name === "google-antigravity") {
+        const poolExclusiveModels: Array<{
+          id: string; wireModelId: string; effortWireModelIds: Record<string, string>; contextWindow: number; inputModalities: string[];
+        }> = [
+          {
+            id: "gemini-4-argon", wireModelId: "gemini-4-argon",
+            effortWireModelIds: { low: "gemini-4-argon-low", medium: "gemini-4-argon-medium", high: "gemini-4-argon-high" },
+            contextWindow: 1048576, inputModalities: ["text", "image"],
+          },
+          {
+            id: "claude-opus-5-5", wireModelId: "claude-opus-5-5",
+            effortWireModelIds: { low: "claude-opus-5-5-low", medium: "claude-opus-5-5-medium", high: "claude-opus-5-5-high" },
+            contextWindow: 1000000, inputModalities: ["text", "image"],
+          },
+          {
+            id: "claude-sonnet-5-5", wireModelId: "claude-sonnet-5-5",
+            effortWireModelIds: { low: "claude-sonnet-5-5-low", medium: "claude-sonnet-5-5-medium", high: "claude-sonnet-5-5-high" },
+            contextWindow: 1000000, inputModalities: ["text", "image"],
+          },
+        ];
+        for (const spec of poolExclusiveModels) {
+          if (!byId.has(spec.id) && anyUsableAccountSupportsAntigravityModel(name, spec.id)) {
+            byId.set(spec.id, spec);
+          }
+        }
+      }
       const merged = [...byId.values()];
       const upstream: CatalogModel[] = merged.map(model => ({
         id: model.id,
