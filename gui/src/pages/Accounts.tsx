@@ -30,83 +30,93 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
   const addMenuRef = useRef<HTMLDivElement>(null);
   const { outcomeFor, copy } = useCopyFeedback<string>();
 
-  // Fetch accounts across providers
+  // Fetch accounts across providers.
+  // Two-phase load: phase 1 reads the cheap local lists (no quota probing) and renders them at once,
+  // carrying over any quota already on screen; phase 2 probes quota per provider in parallel and
+  // merges each provider's rows in as soon as it settles, so a slow probe never blocks the list.
   const loadAccounts = useCallback(async (refresh = false) => {
-    try {
-      const refreshParam = refresh ? "&refresh=1" : "";
-      const results: UnifiedAccountItem[] = [];
-
-      // 1. Google Antigravity & OAuth providers
+    const refreshParam = refresh ? "&refresh=1" : "";
+    const mapOAuth = (p: string, data: { activeAccountId?: string | null; accounts?: Array<any> }): UnifiedAccountItem[] => {
+      const isXai = p === "xai";
+      return (data.accounts ?? []).map(acc => ({
+        id: acc.id,
+        provider: p,
+        providerLabel: p === "google-antigravity" ? "Google Antigravity" : isXai ? "xAI Grok" : p,
+        email: acc.email || (isXai ? (acc.alias ? `${acc.alias}@x.ai` : `grok-${acc.id.slice(0, 8)}@x.ai`) : ""),
+        alias: acc.alias,
+        active: acc.active === true || acc.id === data.activeAccountId,
+        plan: acc.plan ?? (isXai ? "GROK" : "g1-pro-tier"),
+        quota: acc.quota ?? null,
+        quotaMode: acc.quotaMode,
+        quotaUnavailable: acc.quotaUnavailable,
+        quotaPending: acc.quotaPending,
+        health: acc.health,
+        paused: acc.paused,
+        expiresAt: acc.expiresAt,
+        updatedAt: acc.quota?.updatedAt ?? acc.updatedAt,
+        createdAt: acc.createdAt,
+        teamName: isXai ? "xAI 官方账户" : undefined,
+        loginMethod: isXai ? "xAI OAuth 授权" : undefined,
+      }));
+    };
+    const mapCodex = (data: { accounts?: Array<any> }): UnifiedAccountItem[] => (data.accounts ?? []).map(acc => ({
+      id: acc.id,
+      provider: "openai",
+      providerLabel: "OpenAI / Codex",
+      email: acc.email ?? "",
+      alias: acc.logLabel || acc.alias,
+      active: !acc.paused && Boolean(acc.isMain),
+      plan: acc.plan ?? "free",
+      quota: acc.quota ?? null,
+      health: acc.health,
+      paused: acc.paused,
+      isMain: acc.isMain,
+      updatedAt: acc.quota?.updatedAt,
+      createdAt: acc.createdAt,
+      teamName: "个人账户",
+      loginMethod: "使用 Google 登录",
+      resetCount: 0,
+    }));
+    const getJson = async <T,>(url: string): Promise<T | null> => {
       try {
-        const provRes = await fetch(`${apiBase}/api/oauth/providers`).catch(() => null);
-        const provData = provRes ? await provRes.json().catch(() => ({})) as { providers?: string[] } : {};
-        const oauthProviders: string[] = provData.providers ?? ["google-antigravity"];
+        const res = await fetch(url);
+        return res.ok ? await res.json() as T : null;
+      } catch { return null; }
+    };
+    const provData = await getJson<{ providers?: string[] }>(`${apiBase}/api/oauth/providers`);
+    const oauthProviders = provData?.providers ?? ["google-antigravity"];
 
-        for (const p of oauthProviders) {
-          try {
-            const res = await fetch(`${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(p)}&quota=1${refreshParam}`);
-            if (!res.ok) continue;
-            const data = await res.json() as { activeAccountId?: string | null; accounts?: Array<any> };
-            const activeId = data.activeAccountId;
-            for (const acc of data.accounts ?? []) {
-              const isXai = p === "xai";
-              results.push({
-                id: acc.id,
-                provider: p,
-                providerLabel: p === "google-antigravity" ? "Google Antigravity" : isXai ? "xAI Grok" : p,
-                email: acc.email || (isXai ? (acc.alias ? `${acc.alias}@x.ai` : `grok-${acc.id.slice(0, 8)}@x.ai`) : ""),
-                alias: acc.alias,
-                active: acc.active === true || acc.id === activeId,
-                plan: acc.plan ?? (isXai ? "GROK" : "g1-pro-tier"),
-                quota: acc.quota ?? null,
-                quotaMode: acc.quotaMode,
-                quotaUnavailable: acc.quotaUnavailable,
-                quotaPending: acc.quotaPending,
-                health: acc.health,
-                paused: acc.paused,
-                expiresAt: acc.expiresAt,
-                updatedAt: acc.quota?.updatedAt ?? acc.updatedAt,
-                createdAt: acc.createdAt,
-                teamName: isXai ? "xAI 官方账户" : undefined,
-                loginMethod: isXai ? "xAI OAuth 授权" : undefined,
-              });
-            }
-          } catch { /* ignore individual provider fail */ }
-        }
-      } catch { /* ignore */ }
+    // Phase 1: cheap lists, rendered immediately.
+    type OAuthData = { activeAccountId?: string | null; accounts?: Array<any> };
+    const [plainLists, plainCodex] = await Promise.all([
+      Promise.all(oauthProviders.map(p => getJson<OAuthData>(`${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(p)}`))),
+      getJson<{ accounts?: Array<any> }>(`${apiBase}/api/codex-auth/accounts`),
+    ]);
+    const plain: UnifiedAccountItem[] = [];
+    oauthProviders.forEach((p, i) => { const d = plainLists[i]; if (d) plain.push(...mapOAuth(p, d)); });
+    if (plainCodex) plain.push(...mapCodex(plainCodex));
+    setAccounts(prev => {
+      const old = new Map(prev.map(a => [`${a.provider}:${a.id}`, a]));
+      return plain.map(a => {
+        const before = old.get(`${a.provider}:${a.id}`);
+        if (!a.quota && before?.quota) return { ...a, quota: before.quota, updatedAt: before.updatedAt ?? a.updatedAt };
+        return { ...a, quotaPending: a.quotaMode === "probe" ? !before?.quota : a.quotaPending };
+      });
+    });
+    setLoading(false);
 
-      // 2. OpenAI / Codex accounts
-      try {
-        const codexRes = await fetch(`${apiBase}/api/codex-auth/accounts`);
-        if (codexRes.ok) {
-          const codexData = await codexRes.json() as { accounts?: Array<any> };
-          for (const acc of codexData.accounts ?? []) {
-            results.push({
-              id: acc.id,
-              provider: "openai",
-              providerLabel: "OpenAI / Codex",
-              email: acc.email ?? "",
-              alias: acc.logLabel || acc.alias,
-              active: !acc.paused && Boolean(acc.isMain),
-              plan: acc.plan ?? "free",
-              quota: acc.quota ?? null,
-              health: acc.health,
-              paused: acc.paused,
-              isMain: acc.isMain,
-              updatedAt: acc.quota?.updatedAt,
-              createdAt: acc.createdAt,
-              teamName: "个人账户",
-              loginMethod: "使用 Google 登录",
-              resetCount: 0,
-            });
-          }
-        }
-      } catch { /* ignore */ }
-
-      setAccounts(results);
-    } finally {
-      setLoading(false);
-    }
+    // Phase 2: probe quota per provider in parallel; merge each result as it arrives.
+    const merge = (provider: string, fresh: UnifiedAccountItem[]) => setAccounts(prev => {
+      const byId = new Map(fresh.map(a => [a.id, a]));
+      return prev.map(a => (a.provider === provider && byId.has(a.id) ? { ...byId.get(a.id)!, quotaPending: false } : a));
+    });
+    await Promise.all([
+      ...oauthProviders.map(async p => {
+        const d = await getJson<OAuthData>(`${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(p)}&quota=1${refreshParam}`);
+        if (d) merge(p, mapOAuth(p, d));
+        else setAccounts(prev => prev.map(a => (a.provider === p ? { ...a, quotaPending: false } : a)));
+      }),
+    ]);
   }, [apiBase]);
 
   useEffect(() => {
