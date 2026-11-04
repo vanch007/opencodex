@@ -26,6 +26,12 @@ export function preserveConnectedClientRoutingOnExit(teardown: StartExitTeardown
   if (isSharedTeardownDeferredOnExit()) {
     return { ...teardown, restoreNativeCodex: false, stripGrokConfig: false };
   }
+  try {
+    const config = loadConfig();
+    if (config.preserveRouting === true) {
+      return { ...teardown, restoreNativeCodex: false, stripGrokConfig: false };
+    }
+  } catch {}
   const connection = readClientConnectionState();
   return connection.kind === "connected" && connection.value.transport !== "link"
     ? { ...teardown, restoreNativeCodex: false, stripGrokConfig: false }

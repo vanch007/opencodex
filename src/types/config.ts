@@ -1120,6 +1120,8 @@ export interface OcxConfig {
   apiKeys?: OcxApiKeyEntry[];
   /** Auto-start/sync the proxy from the Codex shim before launching Codex. Default true. */
   codexAutoStart?: boolean;
+  /** Keep Codex/Grok client routing and model catalogs intact on process exit/shutdown. */
+  preserveRouting?: boolean;
   /** Restore an installed shim after a stable external Codex update replaces it. Default true. */
   codexShimAutoRestore?: boolean;
   /**
