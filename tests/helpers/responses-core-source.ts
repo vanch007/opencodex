@@ -62,6 +62,7 @@ export const RESPONSES_CORE_MODULES = [
   "passthrough-execution.ts",
   "passthrough-dispatch.ts",
   "generic-oauth-recovery.ts",
+  "passthrough-build-error.ts",
   // Reached from passthrough-dispatch.ts: exact-URL OpenGateway empty-completion recovery.
   "passthrough-completion.ts",
   "opengateway-completion-guard.ts",
