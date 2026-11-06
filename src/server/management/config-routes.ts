@@ -1,3 +1,4 @@
+import { emailMaskingEnabled } from "../../lib/privacy";
 import { readConfigForAdmittedMutation } from "../../config/persisted-mutation";
 import { getConfigDir as configRoot, withConfigDirHardeningSettled as settleConfigRoot } from "../../config/paths";
 import { WindowsSecretAclSettleTimeoutError } from "../../lib/windows-secret-acl";
@@ -462,6 +463,8 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
       // without having to know that `undefined` and `true` mean the same thing.
       oauthOpenBrowser: config.oauthOpenBrowser !== false,
       showCodexCredits: config.showCodexCredits === true,
+      // Absent means masked (#3859); only an explicit false reveals account emails.
+      maskEmails: emailMaskingEnabled(config),
       // Absent means off (today's Design B injection), so the GUI/CLI render a plain switch.
       codexDesktopAuthless: config.codexDesktopAuthless === true,
       // Absent keeps Design B remote compaction; true selects the dedicated provider identity.
@@ -559,6 +562,7 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
       codexQuotaAutoRefresh?: unknown;
       oauthOpenBrowser?: unknown;
       showCodexCredits?: unknown;
+      maskEmails?: unknown;
       ultraFastTier?: unknown;
       fastRows?: unknown;
       codexMainAccountHardLock?: unknown;
@@ -578,6 +582,7 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
       && body.codexQuotaAutoRefresh === undefined
       && body.oauthOpenBrowser === undefined
       && body.showCodexCredits === undefined
+      && body.maskEmails === undefined
       && body.ultraFastTier === undefined
       && body.fastRows === undefined
       && body.codexMainAccountHardLock === undefined
@@ -589,13 +594,16 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
       && body.compactionRecovery === undefined
       && body.reasoningRetention === undefined
       && body.memoryModels === undefined) {
-      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, showCodexCredits, ultraFastTier, fastRows, codexMainAccountHardLock, codexMainAccountHardLockThresholds, codexMainAccountHardLockFallback, codexDesktopAuthless, codexClientCompaction, compactionRouting, compactionRecovery, reasoningRetention, or memoryModels" }, 400);
+      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, showCodexCredits, maskEmails, ultraFastTier, fastRows, codexMainAccountHardLock, codexMainAccountHardLockThresholds, codexMainAccountHardLockFallback, codexDesktopAuthless, codexClientCompaction, compactionRouting, compactionRecovery, reasoningRetention, or memoryModels" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
     }
     if (body.showCodexCredits !== undefined && typeof body.showCodexCredits !== "boolean") {
       return jsonResponse({ error: "showCodexCredits boolean is required" }, 400);
+    }
+    if (body.maskEmails !== undefined && typeof body.maskEmails !== "boolean") {
+      return jsonResponse({ error: "maskEmails boolean is required" }, 400);
     }
     if (body.oauthOpenBrowser !== undefined && typeof body.oauthOpenBrowser !== "boolean") {
       return jsonResponse({ error: "oauthOpenBrowser boolean is required" }, 400);
@@ -704,7 +712,7 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
       const authlessWasEnabled = config.codexDesktopAuthless === true;
       const clientCompactionWasEnabled = config.codexClientCompaction === true;
       const fastRowsWasEnabled = config.fastRows !== false;
-      const restoreCompactionRouting = captureConfigTopLevelRollback(config, ["compactionRouting", "compactionRecovery", "memoryModels", "reasoningRetention"]);
+      const restoreCompactionRouting = captureConfigTopLevelRollback(config, ["compactionRouting", "compactionRecovery", "memoryModels", "reasoningRetention", "privacy"]);
       const previousSettings = {
         codexAutoStart: config.codexAutoStart,
         hasCodexAutoStart: Object.hasOwn(config, "codexAutoStart"),
@@ -758,6 +766,9 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
           config.codexAccountPickerEnabled = false;
         }
         if (typeof body.showCodexCredits === "boolean") config.showCodexCredits = body.showCodexCredits;
+        // Masked is the default, so on deletes the block and off persists the explicit opt-in.
+        if (body.maskEmails === false) config.privacy = { ...config.privacy, maskEmails: false };
+        else if (body.maskEmails === true) deleteConfigTopLevelKey(config, "privacy");
         if (typeof body.oauthOpenBrowser === "boolean") {
           config.oauthOpenBrowser = body.oauthOpenBrowser;
         }
@@ -893,6 +904,7 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
       codexQuotaAutoRefresh: quotaAutoRefreshSettings(config),
       oauthOpenBrowser: config.oauthOpenBrowser !== false,
       showCodexCredits: config.showCodexCredits === true,
+      maskEmails: emailMaskingEnabled(config),
       catalogRefreshPending,
       fastRows: config.fastRows !== false,
       codexDesktopAuthless: authlessIsEnabled,

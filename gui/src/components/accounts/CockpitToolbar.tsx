@@ -2,6 +2,7 @@ import React from "react";
 import {
   IconArrowDown,
   IconArrowUp,
+  IconEye,
   IconEyeOff,
   IconFolder,
   IconGrid,
@@ -21,6 +22,7 @@ interface CockpitToolbarProps {
   sortOrder: "asc" | "desc";
   showSensitive: boolean;
   refreshingAll: boolean;
+  sensitiveBusy?: boolean;
   totalDisplayed: number;
   selectedCount: number;
   isAllSelected: boolean;
@@ -46,6 +48,7 @@ export const CockpitToolbar: React.FC<CockpitToolbarProps> = ({
   sortOrder,
   showSensitive,
   refreshingAll,
+  sensitiveBusy = false,
   totalDisplayed,
   selectedCount,
   isAllSelected,
@@ -181,14 +184,18 @@ export const CockpitToolbar: React.FC<CockpitToolbarProps> = ({
             />
           </button>
 
-          {/* Sensitive / Mask toggle */}
+          {/* Full email / masked email toggle */}
           <button
             type="button"
-            className={`cockpit-round-btn${!showSensitive ? " active" : ""}`}
+            className={`cockpit-round-btn${showSensitive ? " active" : ""}`}
             onClick={onToggleSensitive}
-            title={showSensitive ? "点击隐藏/脱敏邮箱" : "点击显示完整邮箱"}
+            disabled={sensitiveBusy}
+            aria-pressed={showSensitive}
+            title={showSensitive ? "当前显示完整邮箱，点击隐藏/脱敏" : "当前已脱敏，点击显示完整邮箱"}
           >
-            <IconEyeOff style={{ width: 15, height: 15 }} />
+            {showSensitive
+              ? <IconEye style={{ width: 15, height: 15 }} />
+              : <IconEyeOff style={{ width: 15, height: 15 }} />}
           </button>
 
           {/* Export */}

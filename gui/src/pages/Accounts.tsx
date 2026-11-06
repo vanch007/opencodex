@@ -21,7 +21,9 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
   const [sortBy, setSortBy] = useState<"quota" | "reset" | "email">("quota");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
-  const [showSensitive, setShowSensitive] = useState(true);
+  // The proxy masks emails unless privacy.maskEmails is false, so this mirrors the server setting.
+  const [showSensitive, setShowSensitive] = useState(false);
+  const [sensitiveBusy, setSensitiveBusy] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<"overview" | "instances" | "tasks" | "health">("overview");
   const [showAddCodexModal, setShowAddCodexModal] = useState(false);
@@ -123,6 +125,32 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
     void loadAccounts();
   }, [loadAccounts]);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(`${apiBase}/api/settings`, { signal: controller.signal })
+      .then(res => (res.ok ? res.json() : null))
+      .then((s: { maskEmails?: unknown } | null) => { if (s && typeof s.maskEmails === "boolean") setShowSensitive(!s.maskEmails); })
+      .catch(() => { /* keep masked */ });
+    return () => controller.abort();
+  }, [apiBase]);
+
+  const handleToggleSensitive = async () => {
+    if (sensitiveBusy) return;
+    setSensitiveBusy(true);
+    try {
+      const res = await fetch(`${apiBase}/api/settings`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ maskEmails: showSensitive }),
+      });
+      if (res.ok) {
+        const s = await res.json() as { maskEmails?: unknown };
+        if (typeof s.maskEmails === "boolean") setShowSensitive(!s.maskEmails);
+        await loadAccounts();
+      }
+    } finally {
+      setSensitiveBusy(false);
+    }
+  };
   const handleRefreshAll = async () => {
     setRefreshingAll(true);
     try {
@@ -347,6 +375,7 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
           sortBy={sortBy}
           sortOrder={sortOrder}
           showSensitive={showSensitive}
+          sensitiveBusy={sensitiveBusy}
           refreshingAll={refreshingAll}
           totalDisplayed={displayedAccounts.length}
           selectedCount={selectedIds.size}
@@ -356,7 +385,7 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
           onStatusFilterChange={setStatusFilter}
           onSortByChange={setSortBy}
           onToggleSortOrder={() => setSortOrder(sortOrder === "asc" ? "desc" : "asc")}
-          onToggleSensitive={() => setShowSensitive(!showSensitive)}
+          onToggleSensitive={() => void handleToggleSensitive()}
           onRefreshAll={() => void handleRefreshAll()}
           onAddAccount={() => setShowAddMenu(!showAddMenu)}
           onToggleSelectAll={toggleSelectAll}
