@@ -79,6 +79,7 @@ import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostR
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
+import { withLogAccountIdentity } from "./log-account-identity";
 import {
   discardUsageSummaryCacheEntry,
   getUsageSummaryCacheEntry,
@@ -125,7 +126,8 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
     // Not point-free: requestLogDto takes an options object second, and Array.map would pass the
     // element INDEX into it. An explicit arrow keeps the default (decode rate included) and is
     // what /api/logs wants; /api/request-history opts out at its own call sites.
-    const logs = queried.logs.map(entry => requestLogDto(entry));
+    const identityCache = {};
+    const logs = queried.logs.map(entry => withLogAccountIdentity(requestLogDto(entry), config, identityCache));
     const poll = selectRequestLogPoll(logs, url.searchParams, cursor);
     return jsonResponse({
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,

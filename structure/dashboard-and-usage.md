@@ -268,7 +268,7 @@ request content or inferring a helper subtype from timing.
 A failed request persists closed `failureStage` and `failureCause` members on the attempt that ended
 it and on the logical row, derived once at `addFinalRequestLog` from facts that are themselves
 closed; `errorCode` and the context's `upstreamError` are open inputs and are deliberately not read there. The
-resend verdict they imply is never stored — `/api/logs` computes `resendPermission` at read time, so
+resend verdict they imply is never stored — `/api/logs` computes `resendPermission` at read time, so It likewise adds `accountIdentity` to a row and to each attempt at read time (`src/server/management/log-account-identity.ts`): the hashed `accountLogLabel` is mapped back to the one current Codex pool or OAuth account that owns it, named by alias, else email under `privacy.maskEmails`. An ambiguous or deleted account gets no identity, and the persisted row never stores an address.
 a row written by an older build cannot assert a permission the current tables refuse. An attempt also
 carries `deliverySummary`: adapter events, relayed frames, semantic bytes, side effects and terminal
 frames, counted where each event is delivered rather than where it is read, so the gap between the

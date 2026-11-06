@@ -1233,6 +1233,7 @@ export const pt: Record<TKey, string> = {
   "logs.col.model": "Modelo",
   "logs.col.effort": "Esforço",
   "logs.col.provider": "Provedor",
+  "logs.col.account": "Conta",
   "logs.col.status": "Status",
   "logs.col.tokens": "Tokens",
   "logs.col.tokPerSec": "tok/s",

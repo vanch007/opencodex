@@ -135,7 +135,16 @@ interface LogFailureAttribution {
   resendPermission?: ResendPermission;
 }
 
+/** Readable account behind a log row, resolved by the proxy from the stored hashed label. */
+export interface LogAccountIdentity {
+  label: string;
+  name?: string;
+  email?: string;
+  alias?: string;
+}
+
 interface LogAttempt extends LogFailureAttribution {
+  accountIdentity?: LogAccountIdentity;
   ordinal: number;
   provider: string;
   model: string;
@@ -158,6 +167,8 @@ interface LogAttempt extends LogFailureAttribution {
 }
 
 export interface LogEntry extends LogFailureAttribution {
+  accountIdentity?: LogAccountIdentity;
+  accountLogLabel?: string;
   requestId?: string;
   timestamp: number;
   model: string;
@@ -1112,6 +1123,20 @@ function LogDetailDialog({
             )}
             <span className="muted">{t("logs.col.model")}</span><span className="mono">{servedModelLabel(detail)}</span>
             <span className="muted">{t("logs.col.provider")}</span><span>{formatProviderDisplayName(detail.provider, t)}</span>
+            {(detail.accountIdentity || detail.accountLogLabel) && (
+              <>
+                <span className="muted">{t("logs.col.account")}</span>
+                <span className="log-detail-account">
+                  <span className="mono log-detail-break">{detail.accountIdentity?.name ?? detail.accountLogLabel}</span>
+                  {detail.accountIdentity?.alias && detail.accountIdentity.email && (
+                    <span className="muted mono log-detail-break">{detail.accountIdentity.email}</span>
+                  )}
+                  {detail.accountIdentity?.name && detail.accountLogLabel && (
+                    <span className="muted mono">{detail.accountLogLabel}</span>
+                  )}
+                </span>
+              </>
+            )}
             {(detail.requestedEffort || detail.effectiveEffort) && (
               <><span className="muted">{t("logs.col.effort")}</span><span className="mono">{effortLabel(detail)}{reasoningWire ? ` (${reasoningWire})` : ""}</span></>
             )}
@@ -1258,6 +1283,9 @@ function LogDetailDialog({
                       <td className="num mono">{attempt.ordinal}</td>
                       <td>
                         <span>{formatProviderDisplayName(attempt.provider, t)}</span><br />
+                        {attempt.accountIdentity?.name && (
+                          <><span className="mono log-detail-break">{attempt.accountIdentity.name}</span><br /></>
+                        )}
                         <span className="mono muted log-detail-break">{attempt.model}</span>
                         {(attempt.requestedEffort || attempt.effectiveEffort) && (
                           <>

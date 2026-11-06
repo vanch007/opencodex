@@ -2230,6 +2230,7 @@ table.logs-table {
 .log-detail-request-row > span { min-width: 0; }
 .log-detail-notes { margin: 10px 0 0; padding-left: 18px; color: var(--muted); font-size: var(--text-label); }
 .log-detail-notes-line { margin: 8px 0 0; font-size: var(--text-label); }
+.log-detail-account { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .log-detail-attempts-wrap { overflow-x: auto; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); }
 .log-detail-attempts { min-width: 680px; }
 .log-detail-attempts th, .log-detail-attempts td { vertical-align: top; }

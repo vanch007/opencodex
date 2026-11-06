@@ -1218,6 +1218,7 @@ export const vi: Record<TKey, string> = {
   "logs.col.model": "Model",
   "logs.col.effort": "Nỗ lực (Effort)",
   "logs.col.provider": "Nhà cung cấp",
+  "logs.col.account": "Tài khoản",
   "logs.col.status": "Trạng thái",
   "logs.col.tokens": "Tokens",
   "logs.col.tokPerSec": "tok/s",

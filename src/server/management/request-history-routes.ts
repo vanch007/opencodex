@@ -19,6 +19,7 @@ import {
 import { InvalidCursorError } from "../../routing/history/cursor";
 import { requestLogEntryFromPersistedUsage } from "../request-log";
 import { requestLogDto } from "./shared";
+import { withLogAccountIdentity } from "./log-account-identity";
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
 import type { PersistedUsageEntry } from "../../usage/log";
@@ -89,6 +90,7 @@ export async function handleRequestHistoryRoutes(ctx: ManagementContext): Promis
     }
     const cursor = url.searchParams.get("cursor");
     try {
+      const identityCache = {};
       const page = await queryRequestHistory({
         provider: url.searchParams.get("provider")?.trim() || undefined,
         model: url.searchParams.get("model")?.trim() || undefined,
@@ -108,7 +110,7 @@ export async function handleRequestHistoryRoutes(ctx: ManagementContext): Promis
       return jsonResponse({
         // The decode rate is a Logs-page metric; this endpoint shares the DTO but not its
         // contract, so it opts out rather than silently widening its own response shape (#4038).
-        entries: page.rows.map(row => requestLogDto(requestLogEntryFromPersistedUsage(row), { includeDecodeRate: false })),
+        entries: page.rows.map(row => withLogAccountIdentity(requestLogDto(requestLogEntryFromPersistedUsage(row), { includeDecodeRate: false }), config, identityCache)),
         ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
         hasMore: page.hasMore,
         index: {
@@ -191,7 +193,7 @@ export async function handleRequestHistoryRoutes(ctx: ManagementContext): Promis
     if (!entry) {
       return jsonResponse({ error: { code: "not_found", message: "unknown request" } }, 404, req, config);
     }
-    return jsonResponse(requestLogDto(requestLogEntryFromPersistedUsage(entry), { includeDecodeRate: false }), 200, req, config);
+    return jsonResponse(withLogAccountIdentity(requestLogDto(requestLogEntryFromPersistedUsage(entry), { includeDecodeRate: false }), config), 200, req, config);
   }
 
   return null;
