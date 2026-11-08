@@ -22,7 +22,8 @@ export async function canRecoverGenericOAuthResponse(
   state: { genericFailovers: number; genericFailoverLimit: number },
   response: Response, signal: AbortSignal,
 ): Promise<boolean> {
-  return (response.status === 429 || await isAntigravityVerificationRefusal(response, providerName, signal))
+  const isServerFailure = response.status === 502 || response.status === 503 || response.status === 504;
+  return (response.status === 429 || isServerFailure || await isAntigravityVerificationRefusal(response, providerName, signal))
     && !isNonReplayableResponse(response)
     && (response.status === 403 || (state.genericFailovers < state.genericFailoverLimit
       && isGenericOAuthFailoverEnabled(config, providerName)));

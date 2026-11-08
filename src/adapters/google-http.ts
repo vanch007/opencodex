@@ -76,7 +76,9 @@ export async function fetchGoogleWithRetry(
   const repairInvalid400 = opts.repairInvalid400 ?? true;
   const toolSchemaProfile = opts.toolSchemaProfile ?? { endpointClass: "vertex" };
   const toolSchemaPolicy = opts.toolSchemaPolicy ?? "compatible";
-  const timeoutMs = ctx.timeoutMs ?? 200_000;
+  const preferAccountFailover = ctx.preferAccountFailover ?? ctx.kiroPreferAccountFailover ?? false;
+  const rawTimeoutMs = ctx.timeoutMs ?? 200_000;
+  const timeoutMs = (preferAccountFailover && rawTimeoutMs > 35_000) ? 35_000 : rawTimeoutMs;
   const send = createAdapterPhysicalSend(ctx);
   let lastError: unknown;
   let activeRequest = request;
@@ -130,7 +132,7 @@ export async function fetchGoogleWithRetry(
           continue;
         }
       }
-      if (!retryableGoogleStatus(res.status) || attempt === TRANSIENT_RETRY_MAX_ATTEMPTS - 1) {
+      if (!retryableGoogleStatus(res.status) || attempt === TRANSIENT_RETRY_MAX_ATTEMPTS - 1 || preferAccountFailover) {
         return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, activeRequest, ctx.abortSignal);
       }
       // A 429 may be a transient rate limit (retry) or hard quota exhaustion (do NOT retry —
@@ -181,7 +183,7 @@ export async function fetchGoogleWithRetry(
         throw err;
       }
       lastError = err;
-      if (attempt === TRANSIENT_RETRY_MAX_ATTEMPTS - 1) throw err;
+      if (attempt === TRANSIENT_RETRY_MAX_ATTEMPTS - 1 || preferAccountFailover) throw err;
       sendClass = "transient";
       recovery = isConnectionResetError(err) ? "connection-reset" : undefined;
       retryDelayMs = retryBackoffDelayMs(attempt, {

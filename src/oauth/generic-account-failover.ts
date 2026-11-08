@@ -654,27 +654,28 @@ export function rotateGenericOAuthAccountOn429(
   now = Date.now(),
   requestedModelId?: string | null,
   commit = true,
+  kind: KiroRefusalKind | "server_error" | "timeout" = "rate",
 ): string | null {
-  return rotateGenericOAuthAccountOnRefusal(config, providerName, failedAccountId, "rate",
+  return rotateGenericOAuthAccountOnRefusal(config, providerName, failedAccountId, kind,
     retryAfterHeader, now, requestedModelId, undefined, commit);
 }
 
-/** Kiro adds account-scoped refusal classes; all other providers retain their 429 policy. */
+/** Kiro adds account-scoped refusal classes; all other providers retain their 429/server-error failover. */
 export function rotateGenericOAuthAccountOnRefusal(
   config: OcxConfig,
   providerName: string,
   failedAccountId: string,
-  kind: KiroRefusalKind,
+  kind: KiroRefusalKind | "server_error" | "timeout",
   retryAfterHeader: string | null | undefined,
   now = Date.now(),
   requestedModelId?: string | null,
   monthlyCooldownMs?: number,
   commit = true,
 ): string | null {
-  if (kind === "other" || (providerName !== "kiro" && kind !== "rate")) return null;
+  if (kind === "other" || (providerName !== "kiro" && kind !== "rate" && kind !== "server_error" && kind !== "timeout")) return null;
   if (!isGenericOAuthFailoverEnabled(config, providerName)) return null;
   const set = getAccountSet(providerName);
-  // A single stored account has nowhere to go; rotating to itself would just replay the 429.
+  // A single stored account has nowhere to go; rotating to itself would just replay the refusal.
   if (!set || set.accounts.length < 2) return null;
 
   // `preserveServerDelay` keeps the delay the server actually stated, bounded by the parser's
@@ -686,10 +687,11 @@ export function rotateGenericOAuthAccountOnRefusal(
   // An account whose allowance is provably spent gets a reset-aligned cooldown instead of
   // the default minute: retrying it every 60s until the window rolls over is pure waste.
   // For google-antigravity, weekly exhaustion must take precedence over transient Retry-After (e.g. 1s).
-  const exhausted = (providerName === "google-antigravity" || parsed === undefined) && providerName !== "kiro"
+  const exhausted = (providerName === "google-antigravity" || parsed === undefined) && providerName !== "kiro" && kind === "rate"
     ? exhaustedCooldownMs(providerName, failedAccountId, now, set.accounts.find(account => account.id === failedAccountId)) : null;
   const cooldownMs = kind === "suspended" ? 24 * 60 * 60_000
     : kind === "monthly_quota" ? (monthlyCooldownMs ?? ACCOUNT_QUOTA_TTL_MS)
+    : kind === "server_error" || kind === "timeout" ? DEFAULT_COOLDOWN_MS
     : providerName === "kiro" ? (parsed ?? 10_000)
     : (exhausted ?? parsed ?? DEFAULT_COOLDOWN_MS);
   const family = classifyModelFamilyForQuota(providerName, requestedModelId);

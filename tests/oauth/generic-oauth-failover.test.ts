@@ -1061,4 +1061,18 @@ describe("Antigravity authentication refusal selection", () => {
     expect(genericSessionAccount(cfg, "google-antigravity", "sess-a")).toBeNull();
     expect(genericSessionAccount(cfg, "google-antigravity", "sess-b")).toBe(b!);
   });
+
+  test("server_error and timeout refusals rotate generic OAuth accounts and place default cooldown", async () => {
+    const [a, b] = await seedProvider("google-antigravity", 2);
+    const cfg = {
+      oauthAccountFailover: { enabled: true },
+      providers: { "google-antigravity": { authMode: "oauth" } },
+    } as unknown as OcxConfig;
+
+    const rotated = rotateGenericOAuthAccountOn429(
+      cfg, "google-antigravity", a!, undefined, Date.now(), "gemini-4-argon", true, "server_error",
+    );
+    expect(rotated).toBe(b!);
+    expect(eligibleFailoverAccounts("google-antigravity", Date.now(), "gem")).toEqual([b!]);
+  });
 });

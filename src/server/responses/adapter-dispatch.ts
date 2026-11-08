@@ -256,7 +256,7 @@ export async function prepareAdapterExchange(
   const localUpstream = isLocalUpstream(route.provider.baseUrl);
   // Header arrival and body silence are separate clocks (structure/transports/timeouts.md).
   const connectMs = resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream });
-  const sendConnectMs = () => route.provider.authMode === "forward" ? resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: isLocalUpstream(route.provider.baseUrl) }) : 0;
+  const sendConnectMs = () => resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: isLocalUpstream(route.provider.baseUrl) });
   transportState.activeAdapter = transportState.adapter;
   const antigravityPoolActivated = route.providerName === "google-antigravity"
     && isGenericOAuthFailoverEnabled(config, route.providerName);
@@ -403,26 +403,38 @@ export async function prepareAdapterExchange(
       transportState.noteRoutedAttemptSend(inputTokenEstimate, initialRecovery);
       const producer = adapterDispatchBudget?.beginSpendProducer?.();
       try {
-      upstreamResponse = await withProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal, pacingSlot =>
-        transportState.activeAdapter.fetchResponse!(builtInitialRequest, {
-          kiroPreferAccountFailover: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro"),
-          abortSignal: upstream.signal,
-          timeoutMs: sendConnectMs(),
-          sendBudget: adapterDispatchBudget,
-          onPhysicalSend: send => { antigravityDenial.beforeSend(); noteAdapterPhysicalSend(inputTokenEstimate, send); },
-          onRecoveryWithheld: noteAdapterRecoveryWithheld,
-          onUpstreamTiming: sample => recordAttemptUpstreamTiming(logCtx, sample),
-          stream: parsed.stream,
-          executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-            pacingSlotAcquired: true,
-            pacingSlot,
-            dispatchOverride: oauthDispatch(builtInitialRequest),
-            providerName: route.providerName,
-            modelId: route.modelId,
-            beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
-              ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
-          }),
-        }));
+        upstreamResponse = await withProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal, pacingSlot =>
+          transportState.activeAdapter.fetchResponse!(builtInitialRequest, {
+            kiroPreferAccountFailover: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro"),
+            preferAccountFailover: isGenericOAuthFailoverEnabled(config, route.providerName),
+            abortSignal: upstream.signal,
+            timeoutMs: sendConnectMs(),
+            sendBudget: adapterDispatchBudget,
+            onPhysicalSend: send => { antigravityDenial.beforeSend(); noteAdapterPhysicalSend(inputTokenEstimate, send); },
+            onRecoveryWithheld: noteAdapterRecoveryWithheld,
+            onUpstreamTiming: sample => recordAttemptUpstreamTiming(logCtx, sample),
+            stream: parsed.stream,
+            executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              pacingSlotAcquired: true,
+              pacingSlot,
+              dispatchOverride: oauthDispatch(builtInitialRequest),
+              providerName: route.providerName,
+              modelId: route.modelId,
+              beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
+                ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
+            }),
+          }));
+      } catch (dispatchErr) {
+        if (!options.abortSignal?.aborted
+          && transportState.genericFailoverAccountId
+          && transportState.genericFailovers < transportState.genericFailoverLimit
+          && isGenericOAuthFailoverEnabled(config, route.providerName)
+        ) {
+          const isTimeout = dispatchErr instanceof Error && (dispatchErr.name === "TimeoutError" || dispatchErr.message?.includes("timed out"));
+          upstreamResponse = formatErrorResponse(isTimeout ? 504 : 502, "upstream_error", describeUpstreamConnectFailure(dispatchErr, connectMs));
+        } else {
+          throw dispatchErr;
+        }
       } finally { producer?.close(); }
     } else {
       // #1851 scope guard: transient-5xx retry on this generic adapter path is opt-in for
@@ -472,71 +484,86 @@ export async function prepareAdapterExchange(
         : fetchWithResetRetry;
       const initialReporter = transientSendReporter(compactPrepaid ?? options.comboDispatchPermit);
       const deferredInitial = billingPoolRequest && !receiptMode ? deferPhysicalSendReporter(initialReporter) : undefined;
-      try { upstreamResponse = await fetchWithRetryPolicy(
-        recovery => {
-          // Unconfigured generic sends may omit the counting reporter. Capture policy
-          // independently so a later recovery still belongs to this request's start.
-          sendBudgetState.adapterSendBudget?.startRequest?.({
-            poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
-          });
-          // Receipt mode books the physical send at executor admission instead of here.
-          if (!deferredInitial && !receiptMode && compactPrepaid && !compactPrepaidUsed) {
-            if (!compactPrepaid.use()) throw new SendBudgetExhaustedError(errorDestinationLabel(builtInitialRequest.url));
-            compactPrepaidUsed = true;
-          }
-          // Key transport keeps this metadata pending until it binds the actual selection.
-          transportState.noteRoutedAttemptSend(inputTokenEstimate, recovery ?? initialRecovery);
-          return fetchWithHeaderTimeout(builtInitialRequest.url, applyUpstreamRecoveryInit({
-            method: builtInitialRequest.method,
-            headers: builtInitialRequest.headers,
-            body: builtInitialRequest.body,
-          }, recovery), upstream.signal, sendConnectMs(), parsed.stream,
-            providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-              dispatchOverride: oauthDispatch(builtInitialRequest),
-              providerName: route.providerName,
-              modelId: route.modelId,
-              onPhysicalDispatch: () => {
-                if (deferredInitial) {
-                  if (!deferredInitial.beforeDispatch()) throw new SendBudgetExhaustedError(errorDestinationLabel(builtInitialRequest.url));
-                  if (compactPrepaid && !compactPrepaidUsed) {
-                    if (!compactPrepaid.use()) throw new SendBudgetExhaustedError(errorDestinationLabel(builtInitialRequest.url));
-                    compactPrepaidUsed = true;
-                  }
-                }
-                // Preserve the unconfigured direct-adapter accounting contract; Combo admission
-                // and explicit retry/compaction budgets require a receipt for their booked send.
-                if (receiptMode) {
-                  sendBudgetState.noteInitialDispatch(compactPrepaid && !compactPrepaidUsed ? compactPrepaid : undefined);
-                  compactPrepaidUsed = true;
-                }
-              },
-              beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
-                ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
-            }));
-        },
-        {
-          abortSignal: upstream.signal,
-          label: safeHostLabel(builtInitialRequest.url), destination: errorDestinationLabel(builtInitialRequest.url),
-          claimAmbiguousResend: claimPreHeaderResend,
-          ...(sendBudgetState.adapterSendBudget?.spendEnforced || options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
-            || billingPoolRequest || autoPauseEnabled
-            ? {
-              // A pending compaction permit already booked this leg's first physical send.
-              ...(transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt || autoPauseEnabled
+      try {
+        try {
+          upstreamResponse = await fetchWithRetryPolicy(
+            recovery => {
+              // Unconfigured generic sends may omit the counting reporter. Capture policy
+              // independently so a later recovery still belongs to this request's start.
+              sendBudgetState.adapterSendBudget?.startRequest?.({
+                poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
+              });
+              // Receipt mode books the physical send at executor admission instead of here.
+              if (!deferredInitial && !receiptMode && compactPrepaid && !compactPrepaidUsed) {
+                if (!compactPrepaid.use()) throw new SendBudgetExhaustedError(errorDestinationLabel(builtInitialRequest.url));
+                compactPrepaidUsed = true;
+              }
+              // Key transport keeps this metadata pending until it binds the actual selection.
+              transportState.noteRoutedAttemptSend(inputTokenEstimate, recovery ?? initialRecovery);
+              return fetchWithHeaderTimeout(builtInitialRequest.url, applyUpstreamRecoveryInit({
+                method: builtInitialRequest.method,
+                headers: builtInitialRequest.headers,
+                body: builtInitialRequest.body,
+              }, recovery), upstream.signal, sendConnectMs(), parsed.stream,
+                providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+                  dispatchOverride: oauthDispatch(builtInitialRequest),
+                  providerName: route.providerName,
+                  modelId: route.modelId,
+                  onPhysicalDispatch: () => {
+                    if (deferredInitial) {
+                      if (!deferredInitial.beforeDispatch()) throw new SendBudgetExhaustedError(errorDestinationLabel(builtInitialRequest.url));
+                      if (compactPrepaid && !compactPrepaidUsed) {
+                        if (!compactPrepaid.use()) throw new SendBudgetExhaustedError(errorDestinationLabel(builtInitialRequest.url));
+                        compactPrepaidUsed = true;
+                      }
+                    }
+                    // Preserve the unconfigured direct-adapter accounting contract; Combo admission
+                    // and explicit retry/compaction budgets require a receipt for their booked send.
+                    if (receiptMode) {
+                      sendBudgetState.noteInitialDispatch(compactPrepaid && !compactPrepaidUsed ? compactPrepaid : undefined);
+                      compactPrepaidUsed = true;
+                    }
+                  },
+                  beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
+                    ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
+                }));
+            },
+            {
+              abortSignal: upstream.signal,
+              label: safeHostLabel(builtInitialRequest.url), destination: errorDestinationLabel(builtInitialRequest.url),
+              claimAmbiguousResend: claimPreHeaderResend,
+              ...(sendBudgetState.adapterSendBudget?.spendEnforced || options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
+                || billingPoolRequest || autoPauseEnabled
                 ? {
-                  attempts: Math.min(initialSendCap,
-                    sendBudgetState.initialSendAllowance(initialSendCap) + (compactPrepaid ? 1 : 0)),
+                  // A pending compaction permit already booked this leg's first physical send.
+                  ...(transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt || autoPauseEnabled
+                    ? {
+                      attempts: Math.min(initialSendCap,
+                        sendBudgetState.initialSendAllowance(initialSendCap) + (compactPrepaid ? 1 : 0)),
+                    }
+                    : {}),
+                  // Reporter path: direct requests and enforced spend. Receipt-mode sends are
+                  // settled by `onPhysicalDispatch`, so a reporter here would count them twice.
+                  ...(receiptMode
+                    ? {}
+                    : { onSendsConsumed: deferredInitial?.report ?? initialReporter }),
                 }
                 : {}),
-              // Reporter path: direct requests and enforced spend. Receipt-mode sends are
-              // settled by `onPhysicalDispatch`, so a reporter here would count them twice.
-              ...(receiptMode
-                ? {}
-                : { onSendsConsumed: deferredInitial?.report ?? initialReporter }),
-            }
-            : {}),
-        },
-      ); } finally { compactPrepaid?.release(); }
+            },
+          );
+        } catch (dispatchErr) {
+          if (!options.abortSignal?.aborted
+            && transportState.genericFailoverAccountId
+            && transportState.genericFailovers < transportState.genericFailoverLimit
+            && isGenericOAuthFailoverEnabled(config, route.providerName)
+          ) {
+            const isTimeout = dispatchErr instanceof Error && (dispatchErr.name === "TimeoutError" || dispatchErr.message?.includes("timed out"));
+            upstreamResponse = formatErrorResponse(isTimeout ? 504 : 502, "upstream_error", describeUpstreamConnectFailure(dispatchErr, connectMs));
+          } else {
+            throw dispatchErr;
+          }
+        }
+      } finally { compactPrepaid?.release(); }
     }
   } catch (err) {
     cleanupUpstreamAbort();
@@ -708,6 +735,7 @@ export async function prepareAdapterExchange(
               onDispatch?.();
               return transportState.activeAdapter.fetchResponse!(retryRequest, {
                 kiroPreferAccountFailover: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro"),
+            preferAccountFailover: isGenericOAuthFailoverEnabled(config, route.providerName),
                 abortSignal: upstream.signal,
                 timeoutMs: sendConnectMs(),
                 sendBudget: adapterDispatchBudget,
@@ -1544,11 +1572,15 @@ export async function prepareAdapterExchange(
       }
       } else {
       while (
-        upstreamResponse.status === 429
+        (upstreamResponse.status === 429
+          || upstreamResponse.status === 502
+          || upstreamResponse.status === 503
+          || upstreamResponse.status === 504)
         && transportState.genericFailoverAccountId
         && transportState.genericFailovers < transportState.genericFailoverLimit
         && isGenericOAuthFailoverEnabled(config, route.providerName)
       ) {
+        const failKind = upstreamResponse.status === 429 ? "rate" : "server_error";
         // Intersection with the shared request budget. This arm re-sends through
         // rebuildAndRefetch, so the roster cap alone would let one request walk the roster on
         // an allowance the rest of the request cannot see. A refusal ends the ladder with the
@@ -1565,7 +1597,7 @@ export async function prepareAdapterExchange(
         const adapterOwnsDispatch = transportState.activeAdapter.fetchResponse !== undefined;
         const hop = reserveCredentialHop(
           "auth-recovery",
-          `${route.providerName}|${route.modelId}|adapter-recovery-oauth-429`,
+          `${route.providerName}|${route.modelId}|adapter-recovery-oauth-${failKind}`,
           // Counted generic helpers report physical sends; an adapter-owned
           // ladder settles its own booking.
           !adapterOwnsDispatch && genericRefetchCountsSends(),
@@ -1578,6 +1610,8 @@ export async function prepareAdapterExchange(
           upstreamResponse.headers.get("retry-after"),
           Date.now(),
           route.modelId,
+          true,
+          failKind,
         );
         if (!nextAccountId) {
           hop.permit?.release();

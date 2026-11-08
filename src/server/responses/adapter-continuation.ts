@@ -252,6 +252,7 @@ export function createAdapterContinuations(
           return await withProviderRequestSlot(route.providerName, route.provider, nextParsed.modelId, upstream.signal, pacingSlot =>
             transportState.activeAdapter.fetchResponse!(builtContinuationRequest, {
               kiroPreferAccountFailover: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro"),
+              preferAccountFailover: isGenericOAuthFailoverEnabled(config, route.providerName),
               abortSignal: upstream.signal,
               timeoutMs: route.provider.authMode === "forward" ? connectMs : 0,
               sendBudget: adapterDispatchBudget,
@@ -605,6 +606,7 @@ export function createAdapterContinuations(
           `${route.providerName}|${route.modelId}|continuation-oauth-${verificationRequired ? "verification" : "429"}`,
           !adapterOwnsDispatch && transientRetryPolicyFor(route.provider) !== null,
         );
+        const failKind = response.status === 429 ? "rate" : "server_error";
         const nextAccountId = hop.allowed
           ? verificationNextAccountId ?? (!verificationRequired ? rotateGenericOAuthAccountOn429(
             config,
@@ -613,6 +615,8 @@ export function createAdapterContinuations(
             response.headers.get("retry-after"),
             Date.now(),
             route.modelId,
+            true,
+            failKind,
           ) : null)
           : null;
         // A roster quorum ignores cooldowns, so only attribute a budget refusal when the

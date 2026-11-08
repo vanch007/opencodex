@@ -191,6 +191,8 @@ export interface AdapterFetchContext {
   onUpstreamTiming?: (sample: { durationMs: number; outcome: "headers" | "error" }) => void;
   /** Kiro may hand a pooled refusal to the outer account rotator before same-account retry. */
   kiroPreferAccountFailover?: boolean;
+  /** Generic OAuth pools hand refusals/failures to the outer account rotator before same-account retry. */
+  preferAccountFailover?: boolean;
   /** Remains attached to the returned response body after the response headers arrive. */
   abortSignal?: AbortSignal;
   /** Response-header deadline per attempt; non-positive disables it. Body cancellation stays linked. */

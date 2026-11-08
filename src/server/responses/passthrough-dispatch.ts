@@ -733,7 +733,7 @@ export async function preparePassthroughExchange(
     // whose cancel() aborts the upstream — preventing leaked connections (RC2, passthrough path).
     const upstream = new AbortController();
     const cleanupUpstreamAbort = linkAbortSignal(upstream, options.abortSignal ?? req.signal);
-    const sendConnectMs = () => route.provider.authMode === "forward" ? resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: isLocalUpstream(request.url) }) : 0;
+    const sendConnectMs = () => resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: isLocalUpstream(request.url) });
     const connectMs = resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: isLocalUpstream(route.provider.baseUrl) });
     /**
      * This leg's transient-5xx ladder cap, from the provider's own `transientRetryOn5xx`.
@@ -1467,11 +1467,14 @@ export async function preparePassthroughExchange(
       if (hop.allowed) {
         let transferred = false;
         try {
+          const failKind = upstreamResponse.status === 429 ? "rate" : "server_error";
           const nextAccountId = verificationNextAccountId ?? rotateGenericOAuthAccountOn429(
             config, route.providerName, transportState.genericFailoverAccountId,
             upstreamResponse.headers.get("retry-after"),
             Date.now(),
             route.modelId,
+            true,
+            failKind,
           );
           let snapshot: OAuthAccessSnapshot | undefined;
           if (nextAccountId) {
