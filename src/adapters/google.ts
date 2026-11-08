@@ -24,6 +24,7 @@ import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
 import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./google-errors";
 import { isVertexTruncatedTurn, vertexTruncationErrorEvent } from "./google-truncation";
 import { antigravitySessionAnchor, antigravityUserAgentForWireModel, antigravitySessionId, isLikelyRealThoughtSignature, sanitizeAntigravityClaudeSignatures } from "./google-antigravity-wire";
+import { enforceAntigravityClaudeImageLimits, normalizeAntigravityClaudeImages } from "./google-antigravity-images";
 import { summarizeGoogleWireShape } from "./google-wire-shape";
 import { compileGoogleWireBody } from "./google-wire-compiler";
 import type { GoogleToolSchemaLossReport, GoogleToolSchemaProfile } from "./google-tool-schema";
@@ -1185,6 +1186,11 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             applyAntigravityReplay(wireModelId, sessionId, contents);
           } else {
             sanitizeAntigravityClaudeSignatures(contents);
+            await normalizeAntigravityClaudeImages(contents, {
+              tierBias: incoming?.imageTierBias ?? 0,
+              abortSignal: incoming?.abortSignal,
+            });
+            enforceAntigravityClaudeImageLimits(contents);
           }
           // After replay, not instead of it: a real signature always wins, and the sentinel only
           // fills a first functionCall that replay could not sign. Outside the cache branch too,

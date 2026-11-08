@@ -166,6 +166,17 @@ describe("enforceAnthropicImageLimits", () => {
     expect(countImages(messages)).toBe(100);
   });
 
+  test("C4b: >100 images where only surplus oldest exceed 2000px keep all 100 normalized survivors", () => {
+    // Normalization uses processLimit: 100, leaving surplus oldest images at >2000px.
+    // Trimming to 100 before the many-image check preserves all 100 <=2000px survivors.
+    const messages = [userMsg([
+      ...Array.from({ length: 5 }, () => imageBlock(BIG)),
+      ...Array.from({ length: 100 }, () => imageBlock(SMALL)),
+    ])];
+    enforceAnthropicImageLimits(messages);
+    expect(countImages(messages)).toBe(100);
+  });
+
   test("unknown-format images count as risky in many-image requests (trimmed to 20)", () => {
     // An unverifiable image can still be >2000px; one offender 400s the whole
     // many-image request, so unknown dimensions must trigger the <=20 trim.

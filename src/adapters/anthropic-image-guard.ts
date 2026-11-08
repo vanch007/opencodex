@@ -182,6 +182,85 @@ export function cacheControlOf(ref: ImageBlockRef): { cache_control?: unknown } 
   return cacheControl === undefined ? {} : { cache_control: cacheControl };
 }
 
+export interface ImageLimitTarget {
+  base64: string | null;
+  drop(note: string): void;
+}
+
+/**
+ * Enforce Anthropic per-request image limits over wire-neutral image handles (oldest first).
+ * Shared by direct Anthropic Messages and Claude-on-Antigravity (Cloud Code Assist), which
+ * translates Gemini inline_data parts into Vertex Anthropic image blocks upstream.
+ */
+export function enforceImageTargetLimits(targets: ImageLimitTarget[]): void {
+  if (targets.length === 0) return;
+
+  const dims = targets.map(t => (t.base64 ? sniffImageDimensions(t.base64) : null));
+  const live = new Set<number>(targets.keys());
+
+  // Rule 1: images over the absolute 8000px cap are invalid in any request.
+  for (let i = 0; i < targets.length; i++) {
+    const d = dims[i];
+    if (d && (d.width > ABSOLUTE_MAX_DIMENSION || d.height > ABSOLUTE_MAX_DIMENSION)) {
+      targets[i].drop(OVERSIZED_TEXT);
+      live.delete(i);
+    }
+  }
+
+  // Rule 1b: images over the 5MiB per-image cap (base64 chars) are invalid in any request.
+  for (let i = 0; i < targets.length; i++) {
+    if (!live.has(i)) continue;
+    const b64 = targets[i].base64;
+    if (b64 && b64.length > MAX_IMAGE_BASE64_LENGTH) {
+      targets[i].drop(PER_IMAGE_TOO_LARGE_TEXT);
+      live.delete(i);
+    }
+  }
+
+  // Rule 3 runs before Rule 2: normalization skips images older than MAX_IMAGES_PER_REQUEST
+  // (processLimit: 100), so trimming surplus oldest images to 100 first prevents a skipped
+  // >2000px 101st image from triggering the <=20 trim against 100 already-normalized images.
+  if (live.size > MAX_IMAGES_PER_REQUEST) {
+    for (const i of [...live]) {
+      if (live.size <= MAX_IMAGES_PER_REQUEST) break;
+      targets[i].drop(OMITTED_TEXT);
+      live.delete(i);
+    }
+  }
+
+  // Rule 2: many-image requests cap each image at 2000px (<=3000px on Vertex Claude 5.5).
+  // Keep the request at <=20 images (dropping oldest first) whenever a surviving image
+  // exceeds 2000px OR has unknown dimensions (URL sources and unsniffable formats): one
+  // unverifiable offender 400s the whole request upstream, so unknown counts as risky.
+  const hasRiskyForMany = [...live].some(i => {
+    const d = dims[i];
+    return d === null || d.width > MANY_IMAGE_MAX_DIMENSION || d.height > MANY_IMAGE_MAX_DIMENSION;
+  });
+  if (hasRiskyForMany && live.size > MANY_IMAGE_THRESHOLD) {
+    for (const i of [...live]) {
+      if (live.size <= MANY_IMAGE_THRESHOLD) break;
+      targets[i].drop(OMITTED_TEXT);
+      live.delete(i);
+    }
+  }
+
+  // Rule 4: bound the total base64 payload (see TOTAL_IMAGE_BASE64_BUDGET rationale).
+  // Oldest base64 images are dropped first — newest screenshots are the ones the model
+  // needs. URL-source images carry no base64 weight and are never evicted here.
+  let base64Sum = 0;
+  for (const i of live) base64Sum += targets[i].base64?.length ?? 0;
+  if (base64Sum > TOTAL_IMAGE_BASE64_BUDGET) {
+    for (const i of [...live]) {
+      if (base64Sum <= TOTAL_IMAGE_BASE64_BUDGET) break;
+      const b64 = targets[i].base64;
+      if (!b64) continue;
+      targets[i].drop(BYTE_BUDGET_TEXT);
+      live.delete(i);
+      base64Sum -= b64.length;
+    }
+  }
+}
+
 function textify(ref: ImageBlockRef, text: string): void {
   ref.container[ref.index] = { type: "text", text, ...cacheControlOf(ref) };
 }
@@ -197,67 +276,8 @@ function textify(ref: ImageBlockRef, text: string): void {
 export function enforceAnthropicImageLimits(messages: unknown[]): void {
   const refs = collectImageRefs(messages);
   if (refs.length === 0) return;
-
-  const dims = refs.map(r => (r.base64 ? sniffImageDimensions(r.base64) : null));
-  const live = new Set<number>(refs.keys());
-
-  // Rule 1: images over the absolute 8000px cap are invalid in any request.
-  for (let i = 0; i < refs.length; i++) {
-    const d = dims[i];
-    if (d && (d.width > ABSOLUTE_MAX_DIMENSION || d.height > ABSOLUTE_MAX_DIMENSION)) {
-      textify(refs[i], OVERSIZED_TEXT);
-      live.delete(i);
-    }
-  }
-
-  // Rule 1b: images over the 5MiB per-image cap (base64 chars) are invalid in any request.
-  for (let i = 0; i < refs.length; i++) {
-    if (!live.has(i)) continue;
-    const b64 = refs[i].base64;
-    if (b64 && b64.length > MAX_IMAGE_BASE64_LENGTH) {
-      textify(refs[i], PER_IMAGE_TOO_LARGE_TEXT);
-      live.delete(i);
-    }
-  }
-
-  // Rule 2: many-image requests cap each image at 2000px. Keep the request at <=20
-  // images (dropping oldest first) whenever a surviving image exceeds that cap OR has
-  // unknown dimensions (URL sources and unsniffable formats): one unverifiable offender
-  // 400s the whole request upstream, so unknown counts as risky, not as safe.
-  const hasRiskyForMany = [...live].some(i => {
-    const d = dims[i];
-    return d === null || d.width > MANY_IMAGE_MAX_DIMENSION || d.height > MANY_IMAGE_MAX_DIMENSION;
-  });
-  if (hasRiskyForMany && live.size > MANY_IMAGE_THRESHOLD) {
-    for (const i of [...live]) {
-      if (live.size <= MANY_IMAGE_THRESHOLD) break;
-      textify(refs[i], OMITTED_TEXT);
-      live.delete(i);
-    }
-  }
-
-  // Rule 3: hard cap of 100 images per request regardless of size.
-  if (live.size > MAX_IMAGES_PER_REQUEST) {
-    for (const i of [...live]) {
-      if (live.size <= MAX_IMAGES_PER_REQUEST) break;
-      textify(refs[i], OMITTED_TEXT);
-      live.delete(i);
-    }
-  }
-
-  // Rule 4: bound the total base64 payload (see TOTAL_IMAGE_BASE64_BUDGET rationale).
-  // Oldest base64 images are dropped first — newest screenshots are the ones the model
-  // needs. URL-source images carry no base64 weight and are never evicted here.
-  let base64Sum = 0;
-  for (const i of live) base64Sum += refs[i].base64?.length ?? 0;
-  if (base64Sum > TOTAL_IMAGE_BASE64_BUDGET) {
-    for (const i of [...live]) {
-      if (base64Sum <= TOTAL_IMAGE_BASE64_BUDGET) break;
-      const b64 = refs[i].base64;
-      if (!b64) continue;
-      textify(refs[i], BYTE_BUDGET_TEXT);
-      live.delete(i);
-      base64Sum -= b64.length;
-    }
-  }
+  enforceImageTargetLimits(refs.map(ref => ({
+    base64: ref.base64,
+    drop: note => textify(ref, note),
+  })));
 }

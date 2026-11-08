@@ -886,7 +886,7 @@
   "github-copilot-stream-contract.test.ts": "providers/github-copilot",
   "github-copilot-wire-defaults.test.ts": "providers/github-copilot", "google-adapter.test.ts": "adapters/google",
   "google-antigravity-oauth.test.ts": "adapters/google", "google-antigravity-replay.test.ts": "adapters/google",
-  "google-antigravity-wire.test.ts": "adapters/google", "google-buffered-stop-reason.test.ts": "adapters/google",
+  "google-antigravity-wire.test.ts": "adapters/google", "google-antigravity-claude-images.test.ts": "adapters/google", "google-buffered-stop-reason.test.ts": "adapters/google",
   "google-claude-prefill-guard.test.ts": "adapters/google", "google-empty-content.test.ts": "adapters/google",
   "google-errors.test.ts": "adapters/google", "google-hardening.test.ts": "adapters/google",
   "google-stream-fragmentation.test.ts": "adapters/google",

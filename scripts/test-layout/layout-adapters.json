@@ -21,6 +21,7 @@
   "responses-sidecar-usage.test.ts": "responses",
   "google-vertex-key-project.test.ts": "adapters/google",
   "google-stream-fragmentation.test.ts": "adapters/google",
+  "google-antigravity-claude-images.test.ts": "adapters/google",
   "provider-quota-abliteration.test.ts": "providers",
   "claude-inbound-tool-loading.test.ts": "claude-integration",
   "command-code-plan-denial.test.ts": "providers",
