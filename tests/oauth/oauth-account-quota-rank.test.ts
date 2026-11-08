@@ -361,12 +361,12 @@ describe("modular Responses model-family forwarding", () => {
     expect(source).toContain("preferredInitialAccount(config, route.providerName, Date.now(), route.modelId)");
   });
 
-  for (const [owner, retryAfter] of [
-    ["passthrough-dispatch.ts", 'upstreamResponse.headers.get("retry-after")'],
-    ["adapter-dispatch.ts", 'upstreamResponse.headers.get("retry-after")'],
-    ["adapter-continuation.ts", 'response.headers.get("retry-after")'],
-    ["sidecar-execution.ts", "retryAfter"],
-    ["run-turn-execution.ts", "null"],
+  for (const [owner, retryAfter, tail] of [
+    ["passthrough-dispatch.ts", 'upstreamResponse.headers.get("retry-after")', ", true, failKind"],
+    ["adapter-dispatch.ts", 'upstreamResponse.headers.get("retry-after")', ", true, failKind"],
+    ["adapter-continuation.ts", 'response.headers.get("retry-after")', ", true, failKind"],
+    ["sidecar-execution.ts", "retryAfter", ""],
+    ["run-turn-execution.ts", "null", ""],
   ] as const) {
     test(owner + " forwards the routed model on account rotation", () => {
       const source = readFileSync(repoPath("src/server/responses", owner), "utf8");
@@ -374,7 +374,7 @@ describe("modular Responses model-family forwarding", () => {
       expect(source.replace(/\s+/g, " ")).toContain(
         "rotateGenericOAuthAccountOn429( config, route.providerName, "
           + "transportState.genericFailoverAccountId, " + retryAfter
-          + ", Date.now(), route.modelId, )",
+          + ", Date.now(), route.modelId" + (tail ? tail + ", )" : ", )"),
       );
     });
   }

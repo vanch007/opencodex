@@ -23,6 +23,7 @@ import { getValidAccessSnapshotForAccount, type OAuthAccessSnapshot } from "./in
 import {
   accountHeadroomPercent,
   antigravityAccountWeeklyResetAt,
+  antigravityModelExhaustedResetAt,
   exhaustedCooldownMs,
   hasHeadroomEvidence,
   isAccountQuotaExhausted,
@@ -64,6 +65,22 @@ export const GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST = 6;
 
 const DEFAULT_COOLDOWN_MS = 60_000;
 
+/**
+ * Consecutive hang/5xx streaks per account. A hung account that re-enters rotation every minute
+ * costs each request a full connect deadline, so repeated faults back off 1m → 3m → 9m … ≤ 30m.
+ * A streak older than an hour starts over.
+ */
+const FAULT_BACKOFF_MAX_MS = 30 * 60_000;
+const FAULT_STREAK_RESET_MS = 60 * 60_000;
+const faultStreaks = new Map<string, { count: number; at: number }>();
+
+function faultBackoffMs(provider: string, accountId: string, now: number): number {
+  const key = healthKey(provider, accountId);
+  const prev = faultStreaks.get(key);
+  const count = prev && now - prev.at < FAULT_STREAK_RESET_MS ? prev.count + 1 : 1;
+  faultStreaks.set(key, { count, at: now });
+  return Math.min(DEFAULT_COOLDOWN_MS * 3 ** (count - 1), FAULT_BACKOFF_MAX_MS);
+}
 /**
  * How long a presence answer may be reused before the store is consulted again.
  *
@@ -691,9 +708,10 @@ export function rotateGenericOAuthAccountOnRefusal(
     ? exhaustedCooldownMs(providerName, failedAccountId, now, set.accounts.find(account => account.id === failedAccountId)) : null;
   const cooldownMs = kind === "suspended" ? 24 * 60 * 60_000
     : kind === "monthly_quota" ? (monthlyCooldownMs ?? ACCOUNT_QUOTA_TTL_MS)
-    : kind === "server_error" || kind === "timeout" ? DEFAULT_COOLDOWN_MS
+    : kind === "server_error" || kind === "timeout" ? faultBackoffMs(providerName, failedAccountId, now)
     : providerName === "kiro" ? (parsed ?? 10_000)
     : (exhausted ?? parsed ?? DEFAULT_COOLDOWN_MS);
+  if (kind === "rate") faultStreaks.delete(healthKey(providerName, failedAccountId));
   const family = classifyModelFamilyForQuota(providerName, requestedModelId);
   // Suspension is recorded by the caller with the sent generation before the quorum check.
   // Rewriting it here would lose its login-identity fence.
@@ -761,6 +779,11 @@ function pickGenericOAuthFailoverAccount(
   const nonExhausted = candidates.filter(id => !isAccountQuotaExhausted(providerName, id, requestedModelId, rows.get(id)));
   if (nonExhausted.length > 0) {
     candidates = nonExhausted;
+  }
+  // Antigravity model windows (e.g. Argon weekly) are authoritative for that model: an account
+  // whose window is spent would only 429 again, so never rotate onto it, even as a last resort.
+  if (providerName === "google-antigravity") {
+    candidates = candidates.filter(id => antigravityModelExhaustedResetAt(id, requestedModelId, now) === null);
   }
   if (candidates.length === 0) return null;
   const capacityProvider = providerName === "kiro" || providerName === "google-antigravity"
@@ -1009,12 +1032,16 @@ export function forgetGenericFailoverRoster(providerName: string): void {
 export function clearGenericFailoverHealth(providerName?: string): void {
   if (!providerName) {
     health.clear();
+    faultStreaks.clear();
     presence.clear();
     return;
   }
   presence.delete(providerName);
   for (const key of [...health.keys()]) {
     if (key.startsWith(`${providerName}\u0000`)) health.delete(key);
+  }
+  for (const key of [...faultStreaks.keys()]) {
+    if (key.startsWith(`${providerName}\u0000`)) faultStreaks.delete(key);
   }
 }
 

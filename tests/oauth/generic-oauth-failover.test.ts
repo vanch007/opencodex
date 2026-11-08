@@ -1075,4 +1075,42 @@ describe("Antigravity authentication refusal selection", () => {
     expect(rotated).toBe(b!);
     expect(eligibleFailoverAccounts("google-antigravity", Date.now(), "gem")).toEqual([b!]);
   });
+
+  test("repeated hangs back an account off 1m → 3m → 9m instead of a fixed minute", async () => {
+    const [a, b] = await seedProvider("google-antigravity", 2);
+    const cfg = {
+      oauthAccountFailover: { enabled: true },
+      providers: { "google-antigravity": { authMode: "oauth" } },
+    } as unknown as OcxConfig;
+    const t0 = Date.now();
+    const cooledAt = (now: number) => eligibleFailoverAccounts("google-antigravity", now, "gem").includes(a!);
+    rotateGenericOAuthAccountOn429(cfg, "google-antigravity", a!, undefined, t0, "gemini-4-argon", true, "timeout");
+    expect(cooledAt(t0 + 61_000)).toBe(true);
+    rotateGenericOAuthAccountOn429(cfg, "google-antigravity", a!, undefined, t0 + 61_000, "gemini-4-argon", true, "timeout");
+    expect(cooledAt(t0 + 61_000 + 120_000)).toBe(false);
+    expect(cooledAt(t0 + 61_000 + 181_000)).toBe(true);
+    expect(b).toBeDefined();
+  });
+
+  test("a spent model-attributed Argon window removes the account for that model only", async () => {
+    const [a, b, c] = await seedProvider("google-antigravity", 3);
+    const cfg = {
+      oauthAccountFailover: { enabled: true },
+      providers: { "google-antigravity": { authMode: "oauth" } },
+    } as unknown as OcxConfig;
+    const reset = Date.now() + 3_600_000;
+    const argonSpent = {
+      updatedAt: Date.now(),
+      customWindows: [{ label: "Argon (Weekly)", modelId: "gemini-4-argon", percent: 100, resetAt: reset }],
+    };
+    setCachedProviderAccountQuotaForTests("google-antigravity", b!, argonSpent);
+    setCachedProviderAccountQuotaForTests("google-antigravity", c!, argonSpent);
+    expect(rotateGenericOAuthAccountOn429(
+      cfg, "google-antigravity", a!, undefined, Date.now(), "gemini-4-argon-high", true, "timeout",
+    )).toBeNull();
+    // A different Gemini model is unaffected by the Argon window.
+    expect(rotateGenericOAuthAccountOn429(
+      cfg, "google-antigravity", a!, undefined, Date.now(), "gemini-3.8-flash", true, "server_error",
+    )).not.toBeNull();
+  });
 });

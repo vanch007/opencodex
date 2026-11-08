@@ -44,6 +44,43 @@ export function classifyModelFamilyForQuota(
 
 const windowMatchesFamily = antigravityWindowMatchesFamily;
 
+/** `gemini-4-argon-high` and `gemini-4-argon` share one model-attributed window. */
+function requestMatchesWindowModel(windowModelId: string, requestedModelId: string): boolean {
+  const win = windowModelId.toLowerCase();
+  const req = requestedModelId.toLowerCase();
+  return req === win || (req.startsWith(win) && /^-(?:low|medium|high)$/.test(req.slice(win.length)));
+}
+
+/** Live (not yet reset) percents of windows attributed to exactly the requested model. */
+function antigravityModelWindowPercents(
+  windows: ReadonlyArray<{ modelId?: string | null; percent: number; resetAt?: number }> | undefined,
+  requestedModelId: string | null | undefined,
+  now: number,
+): number[] {
+  if (!windows || typeof requestedModelId !== "string" || !requestedModelId.trim()) return [];
+  return windows
+    .filter(w => typeof w.modelId === "string" && requestMatchesWindowModel(w.modelId, requestedModelId))
+    .filter(w => w.resetAt === undefined || (Number.isFinite(w.resetAt) && w.resetAt > now))
+    .map(w => w.percent);
+}
+
+/** Reset time of an exhausted model-attributed window for the requested model, else null. */
+export function antigravityModelExhaustedResetAt(
+  accountId: string,
+  requestedModelId: string | null | undefined,
+  now = Date.now(),
+): number | null {
+  const quota = getCachedProviderAccountQuota("google-antigravity", accountId);
+  if (!quota?.customWindows || typeof requestedModelId !== "string") return null;
+  let earliest: number | null = null;
+  for (const w of quota.customWindows) {
+    if (typeof w.modelId !== "string" || !requestMatchesWindowModel(w.modelId, requestedModelId)) continue;
+    if (!(w.percent >= 100) || typeof w.resetAt !== "number" || !(w.resetAt > now)) continue;
+    earliest = earliest === null ? w.resetAt : Math.min(earliest, w.resetAt);
+  }
+  return earliest;
+}
+
 export function antigravityAccountWeeklyResetAt(accountId: string, requestedModelId?: string | null, now = Date.now()): number | null {
   return antigravityActiveWeeklyResetAt(getCachedProviderAccountQuota("google-antigravity", accountId),
     classifyModelFamilyForQuota("google-antigravity", requestedModelId), now);
@@ -105,6 +142,9 @@ function headroomOf(provider: string, accountId: string, requestedModelId?: stri
       .filter(window => window.modelId === undefined && (!family || antigravityWindowMatchesFamily(window.label, family)))
       .filter(window => window.resetAt === undefined || (Number.isFinite(window.resetAt) && window.resetAt > now))
       .map(window => window.percent);
+    // A model-attributed window (e.g. Argon weekly) is a hard ceiling for exactly that model
+    // only; it never feeds family-level ranking for any other model.
+    percents.push(...antigravityModelWindowPercents(quota.customWindows, requestedModelId, now));
     if (!family || !quota.customWindows?.length) {
       for (const [percent, resetAt] of [
         [quota.fiveHourPercent, quota.fiveHourResetAt], [quota.weeklyPercent, quota.weeklyResetAt],
