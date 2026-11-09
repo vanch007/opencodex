@@ -3,7 +3,12 @@ import * as retry from "../../../src/lib/upstream-retry";
 import { createRequestExecutionBudget } from "../../../src/lib/request-execution-budget";
 import { budgetOwner } from "../../helpers/send-budget-owner";
 import type { AdapterRequest } from "../../../src/adapters/base";
-import { fetchAntigravityWithRetry, fetchDirectGeminiWithRetry, fetchVertexWithRetry } from "../../../src/adapters/google-http";
+import {
+  adaptiveGoogleFailoverTimeoutMs,
+  fetchAntigravityWithRetry,
+  fetchDirectGeminiWithRetry,
+  fetchVertexWithRetry,
+} from "../../../src/adapters/google-http";
 import { ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX, safeVertexHttpErrorMessage, retryableGoogleStatus } from "../../../src/adapters/google-errors";
 import { isAntigravityValidationRefusal } from "../../../src/server/responses/antigravity-validation-refusal";
 
@@ -580,5 +585,19 @@ describe("Google Retry-After is a lower bound (#7802)", () => {
       } finally { sleep.mockRestore(); }
     });
   }
+
+  test("adaptiveGoogleFailoverTimeoutMs scales with prompt body length", () => {
+    // Normal prompt (<=200KB): 35s
+    expect(adaptiveGoogleFailoverTimeoutMs(200_000, 10_000)).toBe(35_000);
+    expect(adaptiveGoogleFailoverTimeoutMs(200_000, 200_000)).toBe(35_000);
+    // Medium context (200KB - 800KB): 55s
+    expect(adaptiveGoogleFailoverTimeoutMs(200_000, 200_001)).toBe(55_000);
+    expect(adaptiveGoogleFailoverTimeoutMs(200_000, 800_000)).toBe(55_000);
+    // Large context (>800KB, e.g. 800K token sessions): 85s
+    expect(adaptiveGoogleFailoverTimeoutMs(200_000, 800_001)).toBe(85_000);
+    expect(adaptiveGoogleFailoverTimeoutMs(200_000, 3_000_000)).toBe(85_000);
+    // Honors configured rawTimeoutMs if lower than the tier cap
+    expect(adaptiveGoogleFailoverTimeoutMs(20_000, 3_000_000)).toBe(20_000);
+  });
 });
 

@@ -61,6 +61,26 @@ async function normalizeFinalGoogleError(label: string, res: Response, request: 
 }
 
 /**
+ * Adaptive connect timeout for Google-family requests under failover:
+ * - Normal requests (prompt body <= 200KB, roughly <= 50K tokens): 35s.
+ *   Enables rapid failover if an account hangs, without stalling the client.
+ * - Medium context (prompt body 200KB - 800KB, roughly 50K - 200K tokens): 55s.
+ * - Massive context (prompt body > 800KB, e.g. 700K - 800K tokens): 85s.
+ *   Google Cloud Code Assist takes 15s - 30s just to prefill & compile prompt cache
+ *   for 800K tokens; giving it 85s prevents cutting off healthy generation during
+ *   upstream queuing/prefill while staying comfortably under the client's 300s budget.
+ */
+export function adaptiveGoogleFailoverTimeoutMs(rawTimeoutMs: number, bodyLength: number): number {
+  if (bodyLength <= 200_000) {
+    return Math.min(rawTimeoutMs, 35_000);
+  }
+  if (bodyLength <= 800_000) {
+    return Math.min(rawTimeoutMs, 55_000);
+  }
+  return Math.min(rawTimeoutMs, 85_000);
+}
+
+/**
  * Fetch a Google-family upstream with Kiro-style hardening: per-attempt timeout
  * (`AbortSignal.any([parent, timeout])`), bounded retry on transient status / network errors,
  * `Retry-After` honoring, jittered exponential backoff, and (unless raw mode is used) a
@@ -78,7 +98,10 @@ export async function fetchGoogleWithRetry(
   const toolSchemaPolicy = opts.toolSchemaPolicy ?? "compatible";
   const preferAccountFailover = ctx.preferAccountFailover ?? ctx.kiroPreferAccountFailover ?? false;
   const rawTimeoutMs = ctx.timeoutMs ?? 200_000;
-  const timeoutMs = (preferAccountFailover && rawTimeoutMs > 35_000) ? 35_000 : rawTimeoutMs;
+  const bodyLen = typeof request.body === "string" ? request.body.length : 0;
+  const timeoutMs = preferAccountFailover
+    ? adaptiveGoogleFailoverTimeoutMs(rawTimeoutMs, bodyLen)
+    : rawTimeoutMs;
   const send = createAdapterPhysicalSend(ctx);
   let lastError: unknown;
   let activeRequest = request;
