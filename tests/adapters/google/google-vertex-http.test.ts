@@ -5,6 +5,7 @@ import { budgetOwner } from "../../helpers/send-budget-owner";
 import type { AdapterRequest } from "../../../src/adapters/base";
 import {
   adaptiveGoogleFailoverTimeoutMs,
+  isDeepReasoningGoogleModel,
   fetchAntigravityWithRetry,
   fetchDirectGeminiWithRetry,
   fetchVertexWithRetry,
@@ -586,18 +587,40 @@ describe("Google Retry-After is a lower bound (#7802)", () => {
     });
   }
 
-  test("adaptiveGoogleFailoverTimeoutMs scales with prompt body length", () => {
-    // Normal prompt (<=200KB): 35s
+  test("adaptiveGoogleFailoverTimeoutMs scales with prompt body length and model family", () => {
+    // Normal prompt (<=200KB): 35s standard, 45s for deep reasoning
     expect(adaptiveGoogleFailoverTimeoutMs(200_000, 10_000)).toBe(35_000);
     expect(adaptiveGoogleFailoverTimeoutMs(200_000, 200_000)).toBe(35_000);
-    // Medium context (200KB - 800KB): 55s
+    expect(adaptiveGoogleFailoverTimeoutMs(200_000, 10_000, "gemini-4-argon")).toBe(45_000);
+    expect(adaptiveGoogleFailoverTimeoutMs(200_000, 200_000, "claude-opus-5-5")).toBe(45_000);
+
+    // Medium context (200KB - 800KB): 55s standard, 90s for deep reasoning
     expect(adaptiveGoogleFailoverTimeoutMs(200_000, 200_001)).toBe(55_000);
     expect(adaptiveGoogleFailoverTimeoutMs(200_000, 800_000)).toBe(55_000);
-    // Large context (>800KB, e.g. 800K token sessions): 85s
+    expect(adaptiveGoogleFailoverTimeoutMs(200_000, 200_001, "gemini-4-argon-high")).toBe(90_000);
+    expect(adaptiveGoogleFailoverTimeoutMs(200_000, 800_000, undefined, '{"model":"gemini-4-argon"}')).toBe(90_000);
+
+    // Large context (>800KB, e.g. 800K token sessions): 85s for Flash, raw timeout for Argon/Reasoning
     expect(adaptiveGoogleFailoverTimeoutMs(200_000, 800_001)).toBe(85_000);
     expect(adaptiveGoogleFailoverTimeoutMs(200_000, 3_000_000)).toBe(85_000);
+    expect(adaptiveGoogleFailoverTimeoutMs(200_000, 800_001, "gemini-4-argon")).toBe(200_000);
+    expect(adaptiveGoogleFailoverTimeoutMs(200_000, 3_000_000, "gemini-4-argon-high")).toBe(200_000);
+    expect(adaptiveGoogleFailoverTimeoutMs(200_000, 3_000_000, undefined, '{"model":"claude-opus-4-6-thinking"}')).toBe(200_000);
+
     // Honors configured rawTimeoutMs if lower than the tier cap
     expect(adaptiveGoogleFailoverTimeoutMs(20_000, 3_000_000)).toBe(20_000);
+    expect(adaptiveGoogleFailoverTimeoutMs(20_000, 3_000_000, "gemini-4-argon")).toBe(20_000);
+  });
+
+  test("isDeepReasoningGoogleModel correctly identifies Argon, Opus, and thinking models", () => {
+    expect(isDeepReasoningGoogleModel("gemini-4-argon")).toBe(true);
+    expect(isDeepReasoningGoogleModel("gemini-4-argon-high")).toBe(true);
+    expect(isDeepReasoningGoogleModel("claude-opus-5-5")).toBe(true);
+    expect(isDeepReasoningGoogleModel("claude-opus-4-6-thinking")).toBe(true);
+    expect(isDeepReasoningGoogleModel("gemini-3.8-flash")).toBe(false);
+    expect(isDeepReasoningGoogleModel("claude-sonnet-5-5")).toBe(false);
+    expect(isDeepReasoningGoogleModel(undefined, '{"model":"gemini-4-argon"}')).toBe(true);
+    expect(isDeepReasoningGoogleModel(undefined, '{"model":"gemini-3.8-flash"}')).toBe(false);
   });
 });
 

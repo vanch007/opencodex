@@ -61,23 +61,49 @@ async function normalizeFinalGoogleError(label: string, res: Response, request: 
 }
 
 /**
- * Adaptive connect timeout for Google-family requests under failover:
- * - Normal requests (prompt body <= 200KB, roughly <= 50K tokens): 35s.
- *   Enables rapid failover if an account hangs, without stalling the client.
- * - Medium context (prompt body 200KB - 800KB, roughly 50K - 200K tokens): 55s.
- * - Massive context (prompt body > 800KB, e.g. 700K - 800K tokens): 85s.
- *   Google Cloud Code Assist takes 15s - 30s just to prefill & compile prompt cache
- *   for 800K tokens; giving it 85s prevents cutting off healthy generation during
- *   upstream queuing/prefill while staying comfortably under the client's 300s budget.
+ * Detect whether a Google/Antigravity model or request is a deep reasoning model
+ * (e.g. Gemini 4 Argon, Claude Opus with thinking, or explicit thinking model)
+ * whose Prefill and initial thought-token generation on large contexts require
+ * substantially more time before the first stream chunk is emitted.
  */
-export function adaptiveGoogleFailoverTimeoutMs(rawTimeoutMs: number, bodyLength: number): number {
+export function isDeepReasoningGoogleModel(modelId?: string, body?: string): boolean {
+  if (modelId && /argon|opus|thinking/i.test(modelId)) return true;
+  if (body) {
+    const prefix = body.slice(0, 1000);
+    if (/argon|opus|thinking/i.test(prefix)) return true;
+  }
+  return false;
+}
+
+/**
+ * Adaptive connect timeout for Google-family requests under failover:
+ * - Normal requests (prompt body <= 200KB, roughly <= 50K tokens): 35s (45s for deep reasoning models).
+ *   Enables rapid failover if an account hangs, without stalling the client.
+ * - Medium context (prompt body 200KB - 800KB, roughly 50K - 200K tokens): 55s (90s for deep reasoning models).
+ * - Massive context (prompt body > 800KB, e.g. 700K - 850K+ tokens): 85s (Flash) / raw timeout, uncapped (Reasoning/Argon).
+ *   Google Cloud Code Assist takes 15s - 30s just to prefill & compile prompt cache
+ *   for 800K tokens on Flash; giving it 85s prevents cutting off healthy generation.
+ *   Heavy reasoning models like Gemini 4 Argon or Claude Opus with high thinking effort
+ *   require significantly longer (often 90s - 150s) to prefill 850K+ tokens and generate
+ *   the initial reasoning chain before emitting headers/chunks.
+ */
+export function adaptiveGoogleFailoverTimeoutMs(
+  rawTimeoutMs: number,
+  bodyLength: number,
+  modelId?: string,
+  body?: string,
+): number {
+  const isReasoning = isDeepReasoningGoogleModel(modelId, body);
   if (bodyLength <= 200_000) {
-    return Math.min(rawTimeoutMs, 35_000);
+    return Math.min(rawTimeoutMs, isReasoning ? 45_000 : 35_000);
   }
   if (bodyLength <= 800_000) {
-    return Math.min(rawTimeoutMs, 55_000);
+    return Math.min(rawTimeoutMs, isReasoning ? 90_000 : 55_000);
   }
-  return Math.min(rawTimeoutMs, 85_000);
+  // Failing over a huge reasoning prompt lands on an account with a cold prompt cache, which must
+  // prefill the whole context again (observed 130-270s at 450K-630K tokens). A short cap only
+  // converts a slow-but-healthy prefill into a failover chain, so honor the configured timeout.
+  return isReasoning ? rawTimeoutMs : Math.min(rawTimeoutMs, 85_000);
 }
 
 /**
@@ -100,7 +126,12 @@ export async function fetchGoogleWithRetry(
   const rawTimeoutMs = ctx.timeoutMs ?? 200_000;
   const bodyLen = typeof request.body === "string" ? request.body.length : 0;
   const timeoutMs = preferAccountFailover
-    ? adaptiveGoogleFailoverTimeoutMs(rawTimeoutMs, bodyLen)
+    ? adaptiveGoogleFailoverTimeoutMs(
+        rawTimeoutMs,
+        bodyLen,
+        request.outboundModelId,
+        typeof request.body === "string" ? request.body : undefined,
+      )
     : rawTimeoutMs;
   const send = createAdapterPhysicalSend(ctx);
   let lastError: unknown;

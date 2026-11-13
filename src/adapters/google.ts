@@ -1227,7 +1227,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         };
         headers["User-Agent"] = antigravityUserAgentForWireModel(wireModelId);
         headers["Authorization"] = `Bearer ${token}`;
-        return { url, method: "POST", headers, body: JSON.stringify(envelope) };
+        return { url, method: "POST", headers, body: JSON.stringify(envelope), outboundModelId: wireModelId };
       }
 
       if (provider.googleMode === "vertex") {
@@ -1269,7 +1269,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           const markerAccount = gcpCredentialMarkerAccount(provider.apiKey);
           headers["Authorization"] = `Bearer ${await getVertexAccessToken({ markerAccount })}`;
         }
-        return { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
+        return { url, method: "POST", headers, body: JSON.stringify(compiled.body), outboundModelId: parsed.modelId };
       }
 
       // Go and Zen use separate guarded Gemini endpoints; AI Studio retains /v1beta.
@@ -1298,7 +1298,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       if (Array.isArray((compiled.body as { contents?: unknown[] }).contents)) {
         applyAntigravityThoughtSignatureFallback(routedModelId, (compiled.body as { contents: unknown[] }).contents);
       }
-      return { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
+      return { url, method: "POST", headers, body: JSON.stringify(compiled.body), outboundModelId: routedModelId };
     },
 
     async *parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent> {
