@@ -14,6 +14,7 @@ import {
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
+import { carryPacedStream, pacedQueuingStrategy } from "../lib/paced-stream";
 import { carryReplayRefusal, isReplayRefusalResponse } from "../lib/upstream-retry";
 import { isUsageDebugEnabled } from "../usage/debug";
 import {
@@ -533,7 +534,7 @@ export function relaySseWithFailedTail(
     terminalBoundary.dispose();
     return "terminal";
   };
-  return new ReadableStream<Uint8Array>({
+  return carryPacedStream(body, new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
         for (;;) {
@@ -603,7 +604,7 @@ export function relaySseWithFailedTail(
       else upstream.abort(reason);
       reader.cancel(reason).catch(() => {});
     },
-  });
+  }, pacedQueuingStrategy(body)));
 }
 
 export { nextSseBlock, sseDataPayload } from "./sse-payload-rewrite";
@@ -1134,6 +1135,8 @@ export type SseInspectorHandlers = {
    * with an empty `output`.
    */
   onParsedPayload?: (payload: unknown) => void;
+  /** Opt-in access to the original bounded frame before payload classification. */
+  onFrame?: (frame: string) => void;
   /**
    * A complete data payload that did not parse as a JSON event, `[DONE]` included.
    *
@@ -1467,6 +1470,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
     const frame = takeCandidate();
     if (reported && !handlers.onCompletedResponse && !handlers.onTerminalResponse) return;
     const decoded = decoder!.decode(frame);
+    try { handlers.onFrame?.(decoded); } catch { /* inspection must never throw into the pump */ }
     scanPayload(sseDataPayload(decoded), sourceBytes);
   };
 
@@ -1524,6 +1528,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
         if (!discardingOversizedFrame && candidateBytes > 0 && !reported) {
           const sourceBytes = candidateBytes;
           const decoded = decoder!.decode(takeCandidate());
+          try { handlers.onFrame?.(decoded); } catch { /* inspection must never throw into the pump */ }
           scanPayload(decoded.trim() ? sseDataPayload(decoded) : null, sourceBytes);
         }
       } finally {

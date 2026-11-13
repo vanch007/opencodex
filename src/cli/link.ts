@@ -10,11 +10,22 @@ import { CODEX_SETTINGS_DIGEST_PATTERN } from "../link/codex-settings";
 import type { LinkLocalPeer, LinkPeerStatus } from "../link/compatibility";
 import { runLinkEnrollment } from "./link-enrollment";
 import { runLinkCleanup, type LinkCleanupDeps } from "./link-cleanup";
+import { LINK_CAPTURE_USAGE, runLinkCapture, type LinkCaptureDeps } from "./link-capture";
+import { LINK_CHILD_OPS_USAGE, runLinkActivity, runLinkCheck, runLinkChildOp, runLinkPolicy } from "./link-child-ops";
+import { LINK_ROUTES_USAGE, runLinkRoutes } from "./link-routes";
+import { LINK_OPERATIONS_USAGE, runLinkOperations } from "./link-operations";
+import { LINK_DIAGNOSTICS_USAGE, runLinkDiagnostics } from "./link-diagnostics";
+import { validateChildOps, validateLinkWs, type LinkChildOpsView, type LinkWsView } from "./link-status-child";
 import { assertSshAlias } from "../link/ssh-argv";
+import { boundHint } from "../link/ssh-runner";
 import { linkStorePath } from "../link/paths";
 import { isLinkPort } from "../link/ports";
 import { readLinkStore, type LinkDirection, type LinkStore } from "../link/store";
+import { parseExplicitRoute } from "../link/explicit-route";
+import type { LinkChildKind } from "../link/store";
 import { findAvailablePort } from "../server/ports";
+import { viaLocalControlSocket, type LocalControlDeps } from "./link-local-control";
+import { validateLinkTraffic } from "./link-status-traffic";
 import {
   CliUsageError,
   RuntimeApiError,
@@ -31,23 +42,38 @@ import {
 } from "./runtime-api";
 
 export const LINK_USAGE = `Usage:
-  ocx link probe <alias> [--json]
-  ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]
+  ocx link probe <alias> [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--json]
+  ocx link add <alias> [--plant] [--expect-fingerprint SHA256:…] [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--operation-id <id>] [--require-ephemeral] [--json]
   ocx link port [--json]
   ocx link issue --alias <alias> --tunnel-port <port> [--json]
   ocx link status [--json]
-  ocx link revoke --link-id <id> [--force --yes] [--json]
+  ${LINK_DIAGNOSTICS_USAGE}
+  ocx link revoke --link-id <id> [--purge] [--force --yes] [--operation-id <id>] [--json]
   ocx link reconnect --link-id <id> [--json]
+${LINK_ROUTES_USAGE.join("\n")}
+${LINK_OPERATIONS_USAGE.join("\n")}
   ocx link cleanup [--link-id <id>] [--json]
+  ocx link check (--link-id <id> | --all) [--no-wait] [--json]
+${LINK_CHILD_OPS_USAGE.join("\n")}
+${LINK_CAPTURE_USAGE.join("\n")}
 
 Forced revoke skips remote cleanup. Run ocx disconnect on the remote client.
-Cleanup reports each Child's platform with disconnect guidance; it changes nothing.`;
+An explicit route (--proxy-command, --ssh-user and --ssh-port, with --exclusive) reaches ssh on the command line for every command and tunnel of the link, so ssh_config cannot change it; an exclusive link refuses route edits.
+Cleanup reports each Child's platform with disconnect guidance; it changes nothing.
+Diagnostics reads this computer's bounded link diagnostics file directly; it contacts no proxy and writes nothing.
+Check reads each Home-initiated Child's installed version and update route; it changes no install.
+Update, sync and restart-codex run on the Child over the link's SSH trust and wait for the job unless --no-wait.
+Capture opens a short, local window in which this machine's link tunnels log sanitized SSH diagnostics.
+Policy reads or changes how this Home keeps its Children current; without flags it only reads.`;
 
 /**
  * What `ocx link status` prints: the runtime's status DTO itself, so a field the server adds (like
- * `peer` or the diagnostics `tunnel`) is part of this type the moment it is part of the wire.
+ * `peer` or the diagnostics `tunnel`) is part of this type the moment it is part of the wire. The `child` block is
+ * read tolerantly, so its type is this CLI's view of it.
  */
-export type LinkStatusPayload = LinkStatusDto;
+export type LinkStatusPayload = Omit<LinkStatusDto, "links"> & {
+  links: Array<Omit<LinkStatusDto["links"][number], "child" | "ws"> & { child?: LinkChildOpsView; ws?: LinkWsView }>;
+};
 
 export interface LinkIssuePayload {
   linkId: string;
@@ -56,16 +82,18 @@ export interface LinkIssuePayload {
   listenerPort: number;
 }
 
-export interface LinkCliDeps extends RuntimeApiDeps, Omit<LinkCleanupDeps, "readStore"> {
+export interface LinkCliDeps extends RuntimeApiDeps, LocalControlDeps, LinkCaptureDeps, Omit<LinkCleanupDeps, "readStore"> {
   /** Test seam can shorten, never extend, the whole enrollment deadline. */
   enrollmentTimeoutMs?: number;
   choosePort?: () => Promise<number>;
   readConfig?: () => LinkStatusConfig;
   readClientLinkIdentity?: (linkId: string) => ClientLinkIdentity | null;
   readChildStatus?: () => LinkStatusDto["child"];
-  confirmFingerprint?: (host: { alias: string; fingerprint: string; keyType: string }) => Promise<boolean>;
+  confirmFingerprint?: (host: { alias: string; fingerprint: string; keyType: string; ocxVersion?: string | null; runtimeKind?: "full" | "ephemeral" | "missing"; binarySizeBytes?: number }) => Promise<boolean>;
   readStore?: () => LinkStore;
   readAdminToken?: () => string | null;
+  /** Test seam: the config directory whose link diagnostics `ocx link diagnostics` reads. */
+  linkConfigDir?: string;
 }
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
@@ -153,11 +181,14 @@ export function validateStatus(value: unknown): LinkStatusPayload {
     if (!isRecord(candidate)) throw new Error(`invalid link API response: link ${index}`);
     // The OCX-6 parity fields are optional on the wire (an older runtime omits them) and always
     // present in this output, null when absent.
-    assertKeys(candidate, ["id", "alias", "direction", "state", "since", "reason", "tunnelPort"], [...PARITY_KEYS, "peer", "tunnel"], `link ${index}`);
+    assertKeys(candidate, ["id", "alias", "direction", "state", "since", "reason", "tunnelPort"], [...PARITY_KEYS, "peer", "tunnel", "childKind", "exclusive", "explicitRoute", "child", "ws", "traffic", "routes", "route", "routeBlocked"], `link ${index}`);
     const parity = validateParity(candidate, index);
     if (typeof candidate.id !== "string" || !LINK_ID.test(candidate.id)
       || !validString(candidate.alias) || (candidate.direction !== "hub-initiated" && candidate.direction !== "client-initiated")
       || (candidate.state !== "connecting" && candidate.state !== "connected" && candidate.state !== "reconnecting" && candidate.state !== "failed" && candidate.state !== "idle")
+      || (candidate.childKind !== undefined && candidate.childKind !== "full" && candidate.childKind !== "ephemeral")
+      || (candidate.exclusive !== undefined && candidate.exclusive !== true)
+      || (candidate.explicitRoute !== undefined && (candidate.exclusive !== true || parseExplicitRoute(candidate.explicitRoute) === null))
       || !validString(candidate.since) || !validNullableString(candidate.reason) || !isLinkPort(candidate.tunnelPort)) {
       throw new Error(`invalid link API response: link ${index} fields`);
     }
@@ -169,9 +200,16 @@ export function validateStatus(value: unknown): LinkStatusPayload {
       since: candidate.since,
       reason: candidate.reason,
       tunnelPort: candidate.tunnelPort,
+      ...(candidate.childKind !== undefined ? { childKind: candidate.childKind as LinkChildKind } : {}),
+      ...(candidate.exclusive === true ? { exclusive: true as const } : {}),
+      ...(candidate.explicitRoute !== undefined ? { explicitRoute: parseExplicitRoute(candidate.explicitRoute)! } : {}),
       ...parity,
       ...(candidate.peer !== undefined ? { peer: validatePeer(candidate.peer, index) } : {}),
       ...(candidate.tunnel !== undefined ? { tunnel: validateTunnel(candidate.tunnel, index) } : {}),
+      ...(candidate.child !== undefined ? { child: validateChildOps(candidate.child, index) } : {}),
+      ...(candidate.ws !== undefined ? { ws: validateLinkWs(candidate.ws, index) } : {}),
+      ...(candidate.traffic !== undefined ? { traffic: validateLinkTraffic(candidate.traffic, index) } : {}),
+      ...validateRoutes(candidate, index),
     };
   });
   let child: LinkStatusPayload["child"] = null;
@@ -216,10 +254,15 @@ function validateIssue(value: unknown): LinkIssuePayload {
   };
 }
 
-function validateRevoke(value: unknown, expectedLinkId: string): void {
+function validateRevoke(value: unknown, expectedLinkId: string, operationId?: string): void {
   if (value === null) return;
   if (!isRecord(value)) throw new Error("invalid link API response: revoke object");
-  assertExactKeys(value, ["linkId"], "revoke");
+  if (operationId === undefined) assertExactKeys(value, ["linkId"], "revoke");
+  else {
+    // A journalled revoke (structure/remote-link.md, "Operation journal") answers its outcome and, for a purge, the receipt.
+    assertKeys(value, ["linkId", "operationId", "outcome"], ["purged"], "revoke");
+    if (value.operationId !== operationId || value.outcome !== "committed" || (value.purged !== undefined && value.purged !== true)) throw new Error("invalid link API response: revoke operation");
+  }
   if (value.linkId !== expectedLinkId) throw new Error("invalid link API response: revoke link id");
 }
 
@@ -242,17 +285,31 @@ async function linkRequest<T>(path: string, init: RequestInit, deps: LinkCliDeps
   } catch (error) {
     if (error instanceof RuntimeApiError) {
       // Never echo an API error body: issue responses contain a one-time data key. Only the error
-      // code survives, because callers branch on it and a code is never secret.
+      // code, the server's already-bounded hint and the residual flag survive (errorCodeBody).
       throw new RuntimeApiError(`Link management request failed (${error.status})`, error.status, errorCodeBody(error.body));
     }
     throw error;
   }
 }
 
-function errorCodeBody(body: unknown): { error: { code: string }; residual?: true } | null {
+const OPERATION_OUTCOMES = new Set(["committed", "failed_clean", "residual", "unknown"]);
+
+function errorCodeBody(body: unknown): { error: { code: string; hint?: string; cause?: string }; residual?: true; operationId?: string; outcome?: string; residualKind?: string } | null {
   if (!isRecord(body) || !isRecord(body.error)) return null;
   const code = body.error.code;
-  return typeof code === "string" && /^[a-z_]{1,64}$/.test(code) ? { error: { code }, ...(body.residual === true ? { residual: true as const } : {}) } : null;
+  if (typeof code !== "string" || !/^[a-z_]{1,64}$/.test(code)) return null;
+  // The hint is the only other field kept (#8357): the server builds it from a Child's last stderr
+  // line, already bounded and redacted, and it is bounded and redacted again here. The rest of
+  // the body is still never echoed.
+  const hint = typeof body.error.hint === "string" ? boundHint(body.error.hint) : undefined;
+  // A cause is a class word (an unproven route's `hostkey`, `auth`, ...): kept only in that shape.
+  const cause = typeof body.error.cause === "string" && /^[a-z_]{1,32}$/.test(body.error.cause) ? body.error.cause : undefined;
+  // An operation's id and outcome (structure/remote-link.md, "Operation journal") are closed forms, kept as such.
+  const operationId = typeof body.operationId === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(body.operationId) ? body.operationId : undefined;
+  const outcome = typeof body.outcome === "string" && OPERATION_OUTCOMES.has(body.outcome) ? body.outcome : undefined;
+  const residualKind = body.residualKind === "plant" || body.residualKind === "enrollment" ? body.residualKind : undefined;
+  return { error: { code, ...(hint ? { hint } : {}), ...(cause ? { cause } : {}) }, ...(body.residual === true ? { residual: true as const } : {}),
+    ...(operationId ? { operationId } : {}), ...(outcome ? { outcome } : {}), ...(residualKind ? { residualKind } : {}) };
 }
 
 async function runPort(args: string[], deps: LinkCliDeps): Promise<void> {
@@ -295,32 +352,57 @@ async function runStatus(args: string[], deps: LinkCliDeps): Promise<void> {
     }
     throw error;
   }
-  // A proxy older than the compatibility report or the tunnel diagnostics ignores the query and
-  // answers without those fields.
-  const result = validateStatus(await linkRequest<unknown>("/api/link/status?compatibility=1&diagnostics=1", {}, { ...deps, baseUrl }));
+  // A proxy older than the compatibility report, the tunnel diagnostics, the Child block, the link WebSocket counters or
+  // the traffic counters ignores the query and answers without those fields.
+  const result = validateStatus(await viaLocalControlSocket(baseUrl, deps,
+    statusDeps => linkRequest<unknown>("/api/link/status?compatibility=1&diagnostics=1&children=1&transport=1&traffic=1&routes=1", {}, statusDeps)));
   console.log(JSON.stringify(result));
 }
 
 async function runRevoke(args: string[], deps: LinkCliDeps): Promise<void> {
   const wantsJson = takeJsonFlag(args);
+  const purge = takeFlag(args, "--purge");
   const force = takeFlag(args, "--force");
   const confirmed = takeFlag(args, "--yes");
   const linkId = takeOption(args, "--link-id");
+  const operationId = takeOption(args, "--operation-id");
   if (!linkId || !LINK_ID.test(linkId)) throw new CliUsageError("revoke requires a valid --link-id", LINK_USAGE);
   rejectArgs(args, LINK_USAGE);
+  if (operationId !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(operationId)) throw new CliUsageError("--operation-id is not a valid operation id", LINK_USAGE);
+  const operationBody = operationId !== undefined ? { operationId } : {};
+  if (purge && force) throw new CliUsageError("--purge cannot be combined with --force", LINK_USAGE);
   if (force && !confirmed) throw new CliUsageError("forced revoke skips remote cleanup; pass --yes to confirm", LINK_USAGE);
   if (confirmed && !force) throw new CliUsageError("--yes requires --force", LINK_USAGE);
+  let wasEphemeral = false;
+  if (force) {
+    try {
+      const store = (deps.readStore ?? (() => readLinkStore(linkStorePath())))();
+      wasEphemeral = store.links.find(l => l.id === linkId)?.childKind === "ephemeral";
+    } catch { /* fallback to standard recovery message when store is unavailable */ }
+  }
   let remoteCleanup: "skipped" | "unverified" = "skipped";
+  let recordedOutcome: unknown;
   try {
     const response = await linkRequest<unknown>(`/api/link/${encodeURIComponent(linkId)}`, force ? {
       method: "DELETE",
       redirect: "error",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ force: true }),
+      body: JSON.stringify({ force: true, ...operationBody }),
+    } : purge || operationId !== undefined ? {
+      method: "DELETE",
+      redirect: "error",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...(purge ? { purge: true } : {}), ...operationBody }),
     } : { method: "DELETE" }, deps);
-    // Legacy revoke accepts an empty response; a forced receipt needs observed identity.
-    if (force && response === null) throw new Error("invalid link API response: revoke object");
-    validateRevoke(response, linkId);
+    // Legacy revoke accepts an empty response; a forced receipt needs observed identity, and so does an operation.
+    if ((force || operationId !== undefined) && response === null) throw new Error("invalid link API response: revoke object");
+    validateRevoke(response, linkId, operationId);
+    if (isRecord(response)) recordedOutcome = response.outcome;
+    if (operationId !== undefined && !force) {
+      const receipt = response as Record<string, unknown>;
+      console.log(JSON.stringify({ linkId, operationId, outcome: receipt.outcome, ...(receipt.purged === true ? { purged: true } : {}) }));
+      return;
+    }
   } catch (error) {
     // Revoke is idempotent: a link the Home no longer has is already revoked, and a Child retrying
     // a join rollback depends on that answer being success. A 404 without this code comes from a
@@ -333,8 +415,10 @@ async function runRevoke(args: string[], deps: LinkCliDeps): Promise<void> {
     remoteCleanup = "unverified";
   }
   if (force) {
-    const recovery = "Run ocx disconnect on the remote client.";
-    printData({ linkId, remoteCleanup, recovery }, wantsJson, [
+    const recovery = wasEphemeral
+      ? "Run ~/.cache/opencodex/bin/ocx-child detach on the remote client."
+      : "Run ocx disconnect on the remote client.";
+    printData({ linkId, remoteCleanup, recovery, ...(operationId !== undefined && recordedOutcome !== undefined ? { operationId, outcome: recordedOutcome } : {}) }, wantsJson, [
       remoteCleanup === "skipped" ? `Revoked ${linkId}; remote cleanup was skipped.` : `Link ${linkId} is already absent; remote cleanup is unverified.`,
       recovery,
     ]);
@@ -356,21 +440,67 @@ async function runReconnect(args: string[], deps: LinkCliDeps): Promise<void> {
 }
 
 export async function runLinkCommand(rawArgs: string[], deps: LinkCliDeps = {}): Promise<number> {
-  return runCliAction(async () => {
+  // runCliAction maps thrown errors (2 usage, 4 on 404, 5 on 409, else 1) and returns 0 on success, so a
+  // verb's own verdict exit (check: 6 for a partial result) travels beside it.
+  let verdictExit = 0;
+  const code = await runCliAction(async () => {
     const args = [...rawArgs];
     const command = args.shift();
     if (command === "probe" || command === "add") await runLinkEnrollment(command, args, deps, linkRequest, LINK_USAGE);
     else if (command === "port") await runPort(args, deps);
     else if (command === "issue") await runIssue(args, deps);
     else if (command === "status") await runStatus(args, deps);
+    else if (command === "diagnostics") await runLinkDiagnostics(args, deps, LINK_USAGE);
     else if (command === "revoke") await runRevoke(args, deps);
     else if (command === "reconnect") await runReconnect(args, deps);
     else if (command === "cleanup") await runLinkCleanup(args, deps, LINK_USAGE);
-    else throw new CliUsageError("link requires one of: probe, add, port, issue, status, revoke, reconnect, cleanup", LINK_USAGE);
+    else if (command === "check") verdictExit = await runLinkCheck(args, deps, linkRequest, LINK_USAGE);
+    else if (command === "update" || command === "sync" || command === "restart-codex") verdictExit = await runLinkChildOp(command, args, deps, linkRequest, LINK_USAGE);
+    else if (command === "capture") await runLinkCapture(args, deps, LINK_USAGE);
+    else if (command === "policy") await runLinkPolicy(args, deps, linkRequest, LINK_USAGE);
+    else if (command === "routes") await runLinkRoutes(args, deps, linkRequest, LINK_USAGE);
+    else if (command === "operations") await runLinkOperations(args, deps, linkRequest, LINK_USAGE);
+    else if (command === "activity") await runLinkActivity(args, deps, linkRequest, LINK_USAGE);
+    else throw new CliUsageError("link requires one of: probe, add, port, issue, status, diagnostics, revoke, reconnect, routes, operations, cleanup, check, update, sync, restart-codex, capture, policy, activity", LINK_USAGE);
   });
+  return code === 0 ? verdictExit : code;
 }
 
 const PARITY_KEYS = ["lastApplyAt", "runtimeStartedAt", "appliedCodexSettingsDigest", "reportedAt"] as const;
+const ROUTE_OUTCOMES = new Set(["transient", "readiness", "grant_unobserved", "forward", "auth", "hostkey"]);
+const ROUTE_BLOCKS = new Set(["ssh_client_unsupported", "stop_unconfirmed"]);
+
+/** The `?routes=1` fields of a multi-route row, all three or none. */
+function validateRoutes(candidate: Record<string, unknown>, index: number): Pick<LinkStatusPayload["links"][number], "routes" | "route" | "routeBlocked"> {
+  const fail = (): never => { throw new Error(`invalid link API response: link ${index} routes`); };
+  const { routes, route, routeBlocked } = candidate;
+  if (routes === undefined && route === undefined && routeBlocked === undefined) return {};
+  if (!Array.isArray(routes) || routes.length < 2 || route === undefined || routeBlocked === undefined) return fail();
+  const parsed = routes.map(entry => {
+    if (!isRecord(entry)) return fail();
+    assertExactKeys(entry, ["name", "eligibleAt", "lastOutcome"], `link ${index} route entry`);
+    if (!validString(entry.name) || (entry.eligibleAt !== null && !validIso(entry.eligibleAt))) fail();
+    const outcome = entry.lastOutcome;
+    if (outcome !== null) {
+      if (!isRecord(outcome)) return fail();
+      assertExactKeys(outcome, ["class", "at"], `link ${index} route outcome`);
+      if (!ROUTE_OUTCOMES.has(outcome.class as string) || !validIso(outcome.at)) fail();
+    }
+    return entry as unknown as NonNullable<LinkStatusPayload["links"][number]["routes"]>[number];
+  });
+  if (route !== null) {
+    if (!isRecord(route)) return fail();
+    assertExactKeys(route, ["name", "index", "since"], `link ${index} route`);
+    if (!validString(route.name) || typeof route.index !== "number" || !Number.isSafeInteger(route.index) || route.index < 0
+      || route.index >= routes.length || !validIso(route.since)) fail();
+  }
+  if (routeBlocked !== null && !ROUTE_BLOCKS.has(routeBlocked as string)) fail();
+  return {
+    routes: parsed,
+    route: route as LinkStatusPayload["links"][number]["route"],
+    routeBlocked: routeBlocked as LinkStatusPayload["links"][number]["routeBlocked"],
+  };
+}
 const WIRE_STATES = new Set(["connecting", "connected", "reconnecting", "failed", "idle"]);
 const CAUSES = new Set<string>(TUNNEL_CAUSES);
 

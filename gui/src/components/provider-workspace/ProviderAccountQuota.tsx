@@ -13,6 +13,7 @@ export default function ProviderAccountQuota({
   quotaUnavailable,
   quotaPending,
   quotaFailure,
+  quotaReadAt,
   provider,
   plan,
   hideArgon,
@@ -45,6 +46,10 @@ export default function ProviderAccountQuota({
     )}
     {quotaUnavailable && quota && !isAntigravity && <p className="muted">
       {t("pws.stats.quotaUpdated")}: {formatRelativeTime(quota.updatedAt, relativeTimeLabelsFromT(t))}
+    </p>}
+    {/* #8397: an unknown balance says when it was last read. */}
+    {(quotaUnavailable || !quota) && !pending && typeof quotaReadAt === "number" && <p className="muted">
+      {t("pws.quotaLastRead")}: {formatRelativeTime(quotaReadAt, relativeTimeLabelsFromT(t))}
     </p>}
   </div>;
 }
