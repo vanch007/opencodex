@@ -176,6 +176,12 @@ async function onboardProject(accessToken: string, signal?: AbortSignal, tierId 
   return undefined;
 }
 
+/** Current subscription tier (paidTier preferred over currentTier); undefined when upstream did not answer. */
+export async function fetchAntigravityPlan(accessToken: string, signal?: AbortSignal): Promise<string | null | undefined> {
+  const account = await loadCodeAssistProject(accessToken, signal);
+  return account ? account.plan : undefined;
+}
+
 /** Discover the CCA project for an access token (loadCodeAssist → onboardUser fallback). */
 export async function discoverAntigravityProject(accessToken: string, signal?: AbortSignal): Promise<string | undefined> {
   return (await discoverAntigravityAccount(accessToken, signal)).projectId;

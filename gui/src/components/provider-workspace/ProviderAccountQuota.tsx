@@ -14,6 +14,8 @@ export default function ProviderAccountQuota({
   quotaPending,
   quotaFailure,
   provider,
+  plan,
+  hideArgon,
 }: AccountQuotaReading & { provider?: string }) {
   const t = useT();
   const quota = accountQuotaFromReport({ quota: rawQuota });
@@ -24,16 +26,18 @@ export default function ProviderAccountQuota({
   const pending = quotaMode === "probe" && quotaPending === true;
   const state = quotaUnavailable ? "unavailable" : pending ? "pending" : quota ? "ready" : quotaMode === "passive" ? "unobserved" : "unknown";
   const isAntigravity = provider === "google-antigravity" || isAntigravityQuota(quota) || isAntigravityQuota(rawQuota);
+  const shouldHideArgon = hideArgon ?? (plan ?? "").toLowerCase().includes("free");
 
   return <div data-quota-state={state}>
     {quotaUnavailable && <p className="muted pwi-auth-acct-quota-stale">{t(failure ? `pws.quotaFailure.${failure}` : "pws.accountQuotaUnavailable")}</p>}
     {quota || pending ? (
       isAntigravity ? (
-        <AntigravityQuotaCard quota={quota} pending={pending && !quota} />
+        <AntigravityQuotaCard quota={quota} pending={pending && !quota} hideArgon={shouldHideArgon} plan={plan} />
       ) : (
         <ProviderCapacityQuota
           report={{ quota, updatedAt: quota?.updatedAt, ...(quotaMode === "passive" ? { observed: true } : {}) }}
           pending={pending && !quota}
+          hideArgon={shouldHideArgon}
         />
       )
     ) : !quotaUnavailable && (

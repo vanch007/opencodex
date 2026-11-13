@@ -47,6 +47,7 @@ const windowMatchesFamily = antigravityWindowMatchesFamily;
 /** `gemini-4-argon-high` and `gemini-4-argon` share one model-attributed window. */
 function requestMatchesWindowModel(windowModelId: string, requestedModelId: string): boolean {
   const win = windowModelId.toLowerCase();
+  if (!win.includes("argon")) return false;
   const req = requestedModelId.toLowerCase();
   return req === win || (req.startsWith(win) && /^-(?:low|medium|high)$/.test(req.slice(win.length)));
 }

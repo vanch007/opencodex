@@ -670,7 +670,9 @@ export default function ProviderAuthPanel({
                       )}
                       <ProviderAccountQuota quotaMode={account.quotaMode} quota={account.quota}
                         quotaUnavailable={account.quotaUnavailable} quotaPending={account.quotaPending} quotaFailure={account.quotaFailure}
-                        provider={item.name} />
+                        provider={item.name}
+                        plan={account.plan}
+                        hideArgon={(account.plan ?? "").toLowerCase().includes("free")} />
                     </div>
                   </li>
                   );

@@ -3,6 +3,9 @@ import { type AccountQuota } from "../../codex-quota-utils";
 interface AntigravityQuotaCardProps {
   quota?: AccountQuota | null;
   pending?: boolean;
+  /** Free tier has no Argon pool even when the summary lists one. */
+  hideArgon?: boolean;
+  plan?: string | null;
 }
 
 /**
@@ -56,12 +59,25 @@ export function isAntigravityQuota(quota?: unknown): boolean {
 
 interface WindowView {
   label: string;
-  remainingPercent: number;
+  /** null = upstream reported no such window; never fabricate a percentage. */
+  remainingPercent: number | null;
   resetText: string;
 }
 
 function renderQuotaWindow(w: WindowView) {
-  const { label, remainingPercent, resetText } = w;
+  const { label, resetText } = w;
+  if (w.remainingPercent === null) {
+    return (
+      <div className="ag-quota-window" key={label}>
+        <div className="ag-quota-head">
+          <span className="ag-quota-label">{label}</span>
+          <span className="ag-quota-pct" style={{ color: "var(--text-tertiary)", fontSize: 11 }}>无数据</span>
+        </div>
+        <div className="ag-quota-bar-track" />
+      </div>
+    );
+  }
+  const remainingPercent = w.remainingPercent;
   const toneClass = remainingPercent < 20
     ? "ag-quota-pct--danger"
     : remainingPercent < 50
@@ -91,7 +107,7 @@ function renderQuotaWindow(w: WindowView) {
   );
 }
 
-export function AntigravityQuotaCard({ quota, pending }: AntigravityQuotaCardProps) {
+export function AntigravityQuotaCard({ quota, pending, hideArgon, plan }: AntigravityQuotaCardProps) {
   if (pending && !quota) {
     return (
       <div className="ag-quota-card ag-quota-card--pending" aria-busy="true">
@@ -152,7 +168,7 @@ export function AntigravityQuotaCard({ quota, pending }: AntigravityQuotaCardPro
 
   const toWindowView = (label: string, raw?: typeof windows[0]): WindowView => {
     if (!raw) {
-      return { label, remainingPercent: 100, resetText: "" };
+      return { label, remainingPercent: null, resetText: "" };
     }
     // raw.percent is used percent. remaining percent = 100 - used
     const used = typeof raw.percent === "number" && Number.isFinite(raw.percent) ? raw.percent : 0;
@@ -169,7 +185,8 @@ export function AntigravityQuotaCard({ quota, pending }: AntigravityQuotaCardPro
   const gem5h = toWindowView("5h", gem5hRaw);
   const gemWeekly = toWindowView("Weekly", gemWeeklyRaw);
 
-  const hasArgon = Boolean(argon5hRaw || argonWeeklyRaw);
+  const isFreePlan = (plan ?? "").toLowerCase().includes("free");
+  const hasArgon = !hideArgon && !isFreePlan && Boolean(argon5hRaw || argonWeeklyRaw);
   const argon5h = toWindowView("5h", argon5hRaw);
   const argonWeekly = toWindowView("Weekly", argonWeeklyRaw);
 

@@ -45,13 +45,13 @@ function asDate(value: number): Date | null {
   return Number.isFinite(date.getTime()) ? date : null;
 }
 
-export function ProviderCapacityQuota({ report, pending }: { report: ProviderQuotaReportView; pending: boolean }) {
+export function ProviderCapacityQuota({ report, pending, hideArgon }: { report: ProviderQuotaReportView; pending: boolean; hideArgon?: boolean }) {
   const t = useT();
   const { locale } = useI18n();
   const aggregation = capacityAggregationFromReport(report);
   const primaryQuota = accountQuotaFromReport(report);
   if (isAntigravityQuota(primaryQuota)) {
-    return <AntigravityQuotaCard quota={primaryQuota} pending={pending && !primaryQuota} />;
+    return <AntigravityQuotaCard quota={primaryQuota} pending={pending && !primaryQuota} hideArgon={hideArgon} />;
   }
   // Only a passively observed row carries this; see ProviderUsage for the same rule.
   const observedAt = observedAtFromReport(report);

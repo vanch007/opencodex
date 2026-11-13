@@ -47,6 +47,8 @@ export type AccountQuotaMode = "probe" | "passive" | "unsupported";
 export interface AccountQuotaReading {
   /** Subscription name supplied by management independently of quota availability. */
   planLabel?: string;
+  plan?: string | null;
+  hideArgon?: boolean;
   quotaMode?: AccountQuotaMode;
   quota?: AccountQuota | null;
   quotaUnavailable?: boolean;

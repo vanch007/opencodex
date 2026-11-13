@@ -49,7 +49,12 @@ export default function ProviderCurrentQuota({ report, reading, provider, onRefr
         </button>
       </div>}
     </div>
-    <ProviderAccountQuota {...effective} provider={provider} />
+    <ProviderAccountQuota
+      {...effective}
+      provider={provider}
+      plan={effective.plan ?? reading?.plan}
+      hideArgon={((effective.plan ?? reading?.plan ?? "") as string).toLowerCase().includes("free")}
+    />
     {quota && !effective.quotaUnavailable && effective.quotaMode !== "unsupported" && !isAntigravity && <dl className="pws-kv pws-usage-meta">
       {!rowOwnsReading && current?.source?.trim() && <div className="pws-kv-row">
         <dt>{t("pws.stats.source")}</dt><dd>{formatQuotaSourceLabel(current.source)}</dd>

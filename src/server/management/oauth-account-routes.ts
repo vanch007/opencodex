@@ -549,6 +549,20 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const forceRefresh = url.searchParams.get("refresh") === "1";
     // Probing may refresh the active credential and mark needsReauth — project health
     // from the post-probe store so the response is not stale.
+    // The tier is otherwise only re-read on a token refresh (hourly), so a stale label (e.g. an
+    // account upgraded to Pro) would survive manual refreshes. Re-read it on an explicit refresh.
+    if (provider === "google-antigravity" && wantQuota && forceRefresh) {
+      const [{ getAccountSet: accountSet, mergeAccountCredential, credentialGeneration }, { getValidAccessTokenForAccount }, { fetchAntigravityPlan }] = await Promise.all([
+        import("../../oauth/store"), import("../../oauth/index"), import("../../oauth/google-antigravity"),
+      ]);
+      await Promise.all((accountSet(provider)?.accounts ?? []).filter(a => !a.paused && !a.needsReauth).map(async account => {
+        try {
+          const plan = await fetchAntigravityPlan(await getValidAccessTokenForAccount(provider, account.id), AbortSignal.timeout(10_000));
+          if (plan === undefined || plan === (account.credential.plan ?? null)) return;
+          await mergeAccountCredential(provider, account.id, { ...account.credential, plan }, { expectedGeneration: credentialGeneration(account.credential) });
+        } catch { /* best effort: keep the stored tier */ }
+      }));
+    }
     const rows = passiveQuota
       ? readPassiveProviderAccountQuotas(provider)
       : await fetchProviderAccountQuotas(provider, forceRefresh, quotaProvider, config);
@@ -613,9 +627,16 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         if (config.providers[provider] !== quotaProvider || row.isCurrent?.() === false) {
           return { ...account, quota: null, quotaUnavailable: true };
         }
+        let quota = row.quota;
+        if (provider === "google-antigravity" && quota?.customWindows && (account.plan ?? "").toLowerCase().includes("free")) {
+          quota = {
+            ...quota,
+            customWindows: quota.customWindows.filter(w => !/argon/i.test(w.label) && w.modelId !== "gemini-4-argon"),
+          };
+        }
         return {
           ...account,
-          quota: row.quota,
+          quota,
           ...(quotaMode === "probe" ? { quotaUnavailable: row.unavailable === true,
             ...(row.unavailable && row.quotaFailure && row.quotaFailureIsCurrent?.() === true ? { quotaFailure: row.quotaFailure } : {}),
           } : {}),
