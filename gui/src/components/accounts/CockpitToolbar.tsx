@@ -18,6 +18,7 @@ interface CockpitToolbarProps {
   searchQuery: string;
   viewMode: "grid" | "list";
   statusFilter: string;
+  planFilter: string;
   sortBy: "quota" | "reset" | "email";
   sortOrder: "asc" | "desc";
   showSensitive: boolean;
@@ -26,9 +27,19 @@ interface CockpitToolbarProps {
   totalDisplayed: number;
   selectedCount: number;
   isAllSelected: boolean;
+  planCounts?: {
+    total: number;
+    pro: number;
+    free: number;
+    ultra: number;
+    plus: number;
+    argon: number;
+    flash: number;
+  };
   onSearchChange: (q: string) => void;
   onViewModeChange: (mode: "grid" | "list") => void;
   onStatusFilterChange: (status: string) => void;
+  onPlanFilterChange: (plan: string) => void;
   onSortByChange: (sort: "quota" | "reset" | "email") => void;
   onToggleSortOrder: () => void;
   onToggleSensitive: () => void;
@@ -44,6 +55,7 @@ export const CockpitToolbar: React.FC<CockpitToolbarProps> = ({
   searchQuery,
   viewMode,
   statusFilter,
+  planFilter,
   sortBy,
   sortOrder,
   showSensitive,
@@ -52,9 +64,11 @@ export const CockpitToolbar: React.FC<CockpitToolbarProps> = ({
   totalDisplayed,
   selectedCount,
   isAllSelected,
+  planCounts,
   onSearchChange,
   onViewModeChange,
   onStatusFilterChange,
+  onPlanFilterChange,
   onSortByChange,
   onToggleSortOrder,
   onToggleSensitive,
@@ -117,18 +131,31 @@ export const CockpitToolbar: React.FC<CockpitToolbarProps> = ({
             className="cockpit-filter-select"
             value={statusFilter}
             onChange={e => onStatusFilterChange(e.target.value)}
+            title="按账号活跃与健康状态筛选"
           >
-            <option value="all">全部 ({totalDisplayed})</option>
+            <option value="all">状态: 全部 ({totalDisplayed})</option>
             <option value="active">当前使用中</option>
             <option value="reauth">需重新登录</option>
             <option value="paused">已暂停</option>
           </select>
 
-          {/* Tag filter placeholder */}
-          <select className="cockpit-filter-select" defaultValue="all">
-            <option value="all">标签筛选</option>
-            <option value="work">工作主号</option>
-            <option value="backup">备用号</option>
+          {/* Membership Tier & Model Tier filter dropdown */}
+          <select
+            className="cockpit-filter-select"
+            value={planFilter}
+            onChange={e => onPlanFilterChange(e.target.value)}
+            title="按会员等级 (Free/Pro/Ultra) 或模型能力筛选"
+          >
+            <option value="all">等级: 全部 {planCounts ? `(${planCounts.total})` : ""}</option>
+            <option value="pro">Pro 会员 {planCounts ? `(${planCounts.pro})` : ""}</option>
+            <option value="free">Free 免费 {planCounts ? `(${planCounts.free})` : ""}</option>
+            <option value="ultra">Ultra 会员 {planCounts ? `(${planCounts.ultra})` : ""}</option>
+            {planCounts && planCounts.plus > 0 && (
+              <option value="plus">Plus 会员 ({planCounts.plus})</option>
+            )}
+            <option disabled value="__sep__" style={{ color: "var(--muted)" }}>──────────</option>
+            <option value="argon">🌟 Argon+C5.5 (高阶) {planCounts ? `(${planCounts.argon})` : ""}</option>
+            <option value="flash">⚡ Flash+C4.6 (基础) {planCounts ? `(${planCounts.flash})` : ""}</option>
           </select>
 
           {/* Sort selector */}

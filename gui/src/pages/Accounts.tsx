@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { UnifiedAccountItem } from "../types/account";
+import { accountHasArgonTier, type UnifiedAccountItem } from "../types/account";
 import { confirmAction, requestTextValue } from "../action-dialogs";
 import AddCodexAccountModal from "../components/AddCodexAccountModal";
 import { useCopyFeedback } from "../components/use-copy-feedback";
@@ -8,6 +8,8 @@ import { CockpitHeader } from "../components/accounts/CockpitHeader";
 import { CockpitToolbar } from "../components/accounts/CockpitToolbar";
 import { CockpitHealthTable } from "../components/accounts/CockpitHealthTable";
 import { IconPlus, IconRefresh, IconUser } from "../icons";
+import { openBrowserRequestField } from "../oauth-open-browser-pref";
+import { parseBrowserLaunch } from "../oauth-browser-launch";
 
 export default function Accounts({ apiBase }: { apiBase: string }) {
   const [loading, setLoading] = useState(true);
@@ -18,6 +20,7 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
   const [selectedProvider, setSelectedProvider] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [planFilter, setPlanFilter] = useState<string>("all");
   const [sortBy, setSortBy] = useState<"quota" | "reset" | "email">("quota");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
@@ -26,11 +29,26 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
   const [sensitiveBusy, setSensitiveBusy] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<"overview" | "instances" | "tasks" | "health">("overview");
+  const [testingHealthIds, setTestingHealthIds] = useState<Set<string>>(new Set());
+  const [isTestingAll, setIsTestingAll] = useState(false);
   const [showAddCodexModal, setShowAddCodexModal] = useState(false);
   const [showAddMenu, setShowAddMenu] = useState(false);
+  const [oauthBusyProvider, setOauthBusyProvider] = useState<string | null>(null);
   const [infoModalAccount, setInfoModalAccount] = useState<UnifiedAccountItem | null>(null);
   const addMenuRef = useRef<HTMLDivElement>(null);
   const { outcomeFor, copy } = useCopyFeedback<string>();
+
+  // Close add-account dropdown menu on click outside
+  useEffect(() => {
+    if (!showAddMenu) return;
+    const handlePointerDown = (e: MouseEvent) => {
+      if (addMenuRef.current && !addMenuRef.current.contains(e.target as Node)) {
+        setShowAddMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [showAddMenu]);
 
   // Fetch accounts across providers.
   // Two-phase load: phase 1 reads the cheap local lists (no quota probing) and renders them at once,
@@ -47,7 +65,7 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
         email: acc.email || (isXai ? (acc.alias ? `${acc.alias}@x.ai` : `grok-${acc.id.slice(0, 8)}@x.ai`) : ""),
         alias: acc.alias,
         active: acc.active === true || acc.id === data.activeAccountId,
-        plan: acc.plan ?? (isXai ? "GROK" : "g1-pro-tier"),
+        plan: acc.plan ?? (isXai ? "GROK" : "free-tier"),
         quota: acc.quota ?? null,
         quotaMode: acc.quotaMode,
         quotaUnavailable: acc.quotaUnavailable,
@@ -238,23 +256,127 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
     await loadAccounts();
   };
 
+  const handleTestAccountHealth = async (item: UnifiedAccountItem, model?: string) => {
+    if (testingHealthIds.has(item.id)) return;
+    setTestingHealthIds(prev => new Set(prev).add(item.id));
+    try {
+      const res = await fetch(`${apiBase}/api/oauth/accounts/test-health`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: item.provider,
+          accountId: item.id,
+          model,
+        }),
+      });
+      if (res.ok) {
+        const result = (await res.json()) as {
+          ok: boolean;
+          status: number;
+          durationMs: number;
+          model: string;
+          errorCode?: string;
+          message: string;
+        };
+        setAccounts(prev =>
+          prev.map(a =>
+            a.id === item.id && a.provider === item.provider
+              ? {
+                  ...a,
+                  health: {
+                    status: result.ok
+                      ? "healthy"
+                      : result.status === 403 || result.status === 401
+                      ? "reauth_required"
+                      : "warning",
+                    reason: result.errorCode,
+                  },
+                  healthTest: {
+                    ...result,
+                    testedAt: Date.now(),
+                  },
+                }
+              : a,
+          ),
+        );
+      }
+    } catch {
+      // ignore
+    } finally {
+      setTestingHealthIds(prev => {
+        const next = new Set(prev);
+        next.delete(item.id);
+        return next;
+      });
+    }
+  };
+
+  const handleTestAllAccountsHealth = async () => {
+    if (isTestingAll || displayedAccounts.length === 0) return;
+    setIsTestingAll(true);
+    try {
+      const queue = [...displayedAccounts];
+      while (queue.length > 0) {
+        const batch = queue.splice(0, 3);
+        await Promise.all(batch.map(acc => handleTestAccountHealth(acc)));
+      }
+    } finally {
+      setIsTestingAll(false);
+    }
+  };
+
   const handleAddOAuthAccount = async (provider: string) => {
     setShowAddMenu(false);
     if (provider === "openai") {
       setShowAddCodexModal(true);
       return;
     }
+    setOauthBusyProvider(provider);
     try {
       const res = await fetch(`${apiBase}/api/oauth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider, addAccount: true }),
+        body: JSON.stringify({
+          provider,
+          addAccount: true,
+          ...openBrowserRequestField(),
+        }),
       });
-      const data = await res.json().catch(() => ({})) as { url?: string };
-      if (data.url) {
-        window.open(data.url, "_blank");
+      const data = await res.json().catch(() => ({})) as {
+        url?: string;
+        browserLaunch?: unknown;
+        error?: string;
+      };
+      if (!res.ok || data.error) {
+        setOauthBusyProvider(null);
+        return;
       }
-    } catch { /* ignore */ }
+      const browserLaunch = parseBrowserLaunch(data.browserLaunch);
+      // 优化重复弹出授权页面：服务端若已通过 openUrl 打开浏览器，则前端不再调用 window.open 重复拉起
+      if (data.url && browserLaunch !== "started") {
+        window.open(data.url, "_blank", "noopener,noreferrer");
+      }
+      // 后台轮询登录状态，授权成功后自动刷新账号列表
+      void (async () => {
+        try {
+          for (let i = 0; i < 80; i++) {
+            await new Promise(r => setTimeout(r, 1500));
+            const sRes = await fetch(`${apiBase}/api/oauth/status?provider=${encodeURIComponent(provider)}`).catch(() => null);
+            if (!sRes || !sRes.ok) continue;
+            const s = await sRes.json().catch(() => null) as { loggedIn?: boolean; status?: string; error?: string } | null;
+            if (s?.error) break;
+            if (s?.loggedIn || s?.status === "complete") {
+              await loadAccounts(true);
+              break;
+            }
+          }
+        } finally {
+          setOauthBusyProvider(null);
+        }
+      })();
+    } catch {
+      setOauthBusyProvider(null);
+    }
   };
 
   const handleExportAccount = (acc: UnifiedAccountItem) => {
@@ -290,6 +412,36 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
     return counts;
   }, [accounts]);
 
+  // Plan & capability statistics for the currently selected provider scope
+  const planCounts = useMemo(() => {
+    const subset = accounts.filter(a => selectedProvider === "all" || a.provider === selectedProvider);
+    let pro = 0;
+    let free = 0;
+    let ultra = 0;
+    let plus = 0;
+    let argon = 0;
+    let flash = 0;
+    for (const a of subset) {
+      const p = (a.plan ?? "").toLowerCase();
+      if (p.includes("pro") || p === "g1-pro-tier") pro++;
+      if (p.includes("free")) free++;
+      if (p.includes("ultra")) ultra++;
+      if (p.includes("plus")) plus++;
+      const hasArgon = accountHasArgonTier(a);
+      if (hasArgon) argon++;
+      else flash++;
+    }
+    return {
+      total: subset.length,
+      pro,
+      free,
+      ultra,
+      plus,
+      argon,
+      flash,
+    };
+  }, [accounts, selectedProvider]);
+
   // Filtered and sorted accounts
   const displayedAccounts = useMemo(() => {
     return accounts
@@ -305,6 +457,17 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
         if (statusFilter === "active" && !acc.active) return false;
         if (statusFilter === "paused" && !acc.paused) return false;
         if (statusFilter === "reauth" && acc.health?.status !== "reauth_required") return false;
+
+        if (planFilter !== "all") {
+          const p = (acc.plan ?? "").toLowerCase();
+          const hasArgon = accountHasArgonTier(acc);
+          if (planFilter === "pro" && !(p.includes("pro") || p === "g1-pro-tier")) return false;
+          if (planFilter === "free" && !p.includes("free")) return false;
+          if (planFilter === "ultra" && !p.includes("ultra")) return false;
+          if (planFilter === "plus" && !p.includes("plus")) return false;
+          if (planFilter === "argon" && !hasArgon) return false;
+          if (planFilter === "flash" && hasArgon) return false;
+        }
         return true;
       })
       .sort((a, b) => {
@@ -325,7 +488,7 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
         }
         return sortOrder === "asc" ? -diff : diff;
       });
-  }, [accounts, selectedProvider, searchQuery, statusFilter, sortBy, sortOrder]);
+  }, [accounts, selectedProvider, searchQuery, statusFilter, planFilter, sortBy, sortOrder]);
 
   const toggleSelectAll = () => {
     if (selectedIds.size === displayedAccounts.length) {
@@ -372,6 +535,7 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
           searchQuery={searchQuery}
           viewMode={viewMode}
           statusFilter={statusFilter}
+          planFilter={planFilter}
           sortBy={sortBy}
           sortOrder={sortOrder}
           showSensitive={showSensitive}
@@ -380,9 +544,11 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
           totalDisplayed={displayedAccounts.length}
           selectedCount={selectedIds.size}
           isAllSelected={displayedAccounts.length > 0 && selectedIds.size === displayedAccounts.length}
+          planCounts={planCounts}
           onSearchChange={setSearchQuery}
           onViewModeChange={setViewMode}
           onStatusFilterChange={setStatusFilter}
+          onPlanFilterChange={setPlanFilter}
           onSortByChange={setSortBy}
           onToggleSortOrder={() => setSortOrder(sortOrder === "asc" ? "desc" : "asc")}
           onToggleSensitive={() => void handleToggleSensitive()}
@@ -400,6 +566,7 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
               type="button"
               className="cockpit-dropdown-item"
               onClick={() => void handleAddOAuthAccount("google-antigravity")}
+              disabled={oauthBusyProvider !== null}
             >
               <span>添加 Google Antigravity</span>
             </button>
@@ -414,12 +581,36 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
               type="button"
               className="cockpit-dropdown-item"
               onClick={() => void handleAddOAuthAccount("xai")}
+              disabled={oauthBusyProvider !== null}
             >
               <span>添加 xAI Grok</span>
             </button>
           </div>
         )}
       </div>
+
+      {/* ── OAuth In-Progress Notice ── */}
+      {oauthBusyProvider && (
+        <div
+          style={{
+            margin: "0 0 12px 0",
+            padding: "8px 14px",
+            background: "rgba(59, 130, 246, 0.1)",
+            border: "1px solid rgba(59, 130, 246, 0.3)",
+            borderRadius: "var(--radius-sm, 8px)",
+            fontSize: "13px",
+            color: "#3b82f6",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+          }}
+        >
+          <IconRefresh className="spin" style={{ width: 14, height: 14 }} />
+          <span>
+            正在等待 {oauthBusyProvider === "xai" ? "xAI Grok" : oauthBusyProvider === "google-antigravity" ? "Google Antigravity" : oauthBusyProvider} 浏览器授权完成...
+          </span>
+        </div>
+      )}
 
       {/* ── Main Content Views ── */}
       {loading ? (
@@ -462,12 +653,16 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
           selectedIds={selectedIds}
           switchingId={switchingId}
           refreshingId={refreshingId}
+          testingHealthIds={testingHealthIds}
+          isTestingAll={isTestingAll}
           copiedId={outcomeFor("account-table")}
           formatEmail={formatDisplayEmail}
           onToggleSelectAll={toggleSelectAll}
           onToggleSelectOne={toggleSelectOne}
           onSwitch={handleSwitchAccount}
           onRefresh={handleRefreshAccount}
+          onTestHealth={handleTestAccountHealth}
+          onTestAllHealth={handleTestAllAccountsHealth}
           onEditAlias={handleEditAlias}
           onCopy={copy}
           onRemove={handleRemoveAccount}
@@ -482,11 +677,13 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
               isSelected={selectedIds.has(acc.id)}
               isSwitching={switchingId === acc.id}
               isRefreshing={refreshingId === acc.id}
+              isTestingHealth={testingHealthIds.has(acc.id)}
               copiedId={outcomeFor(acc.id)}
               formatEmail={formatDisplayEmail}
               onToggleSelect={toggleSelectOne}
               onSwitch={handleSwitchAccount}
               onRefresh={handleRefreshAccount}
+              onTestHealth={handleTestAccountHealth}
               onEditAlias={handleEditAlias}
               onCopy={copy}
               onRemove={handleRemoveAccount}

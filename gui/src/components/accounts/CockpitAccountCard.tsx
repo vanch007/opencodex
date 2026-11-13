@@ -1,7 +1,8 @@
 import React from "react";
-import type { UnifiedAccountItem } from "../../types/account";
+import { accountHasArgonTier, type UnifiedAccountItem } from "../../types/account";
 import { formatAntigravityReset, AntigravityQuotaCard } from "../provider-workspace/AntigravityQuotaCard";
 import {
+  IconActivity,
   IconCheck,
   IconCopy,
   IconInfo,
@@ -18,11 +19,13 @@ interface CockpitAccountCardProps {
   isSelected: boolean;
   isSwitching: boolean;
   isRefreshing: boolean;
+  isTestingHealth?: boolean;
   copiedId: string | null;
   formatEmail: (email: string) => string;
   onToggleSelect: (id: string) => void;
   onSwitch: (item: UnifiedAccountItem) => void;
   onRefresh: (item: UnifiedAccountItem) => void;
+  onTestHealth?: (item: UnifiedAccountItem) => void;
   onEditAlias: (item: UnifiedAccountItem) => void;
   onCopy: (text: string, id: string) => void;
   onRemove: (item: UnifiedAccountItem) => void;
@@ -47,11 +50,13 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
   isSelected,
   isSwitching,
   isRefreshing,
+  isTestingHealth = false,
   copiedId,
   formatEmail,
   onToggleSelect,
   onSwitch,
   onRefresh,
+  onTestHealth,
   onEditAlias,
   onCopy,
   onRemove,
@@ -63,21 +68,35 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
   const isCopied = copiedId === acc.id;
 
   // Plan styling
+  const pLower = (acc.plan ?? "").toLowerCase();
+  const isFree = pLower.includes("free");
+  const isUltra = pLower.includes("ultra");
+  const isPro = pLower.includes("pro") || pLower === "g1-pro-tier";
+  const isPlus = pLower.includes("plus");
+
   const planText = isGrok
     ? "GROK"
-    : (acc.plan === "g1-pro-tier" || acc.plan === "pro")
-      ? "PRO"
-      : acc.plan === "plus"
-        ? "PLUS"
-        : (acc.plan ?? "FREE").toUpperCase();
+    : isUltra
+      ? "ULTRA"
+      : isPro
+        ? "PRO"
+        : isPlus
+          ? "PLUS"
+          : isFree
+            ? "FREE-TIER"
+            : (acc.plan ?? "FREE").toUpperCase();
 
   const planClass = isGrok
     ? "cockpit-badge-plan cockpit-badge-plan--grok"
-    : (planText === "PRO")
-      ? "cockpit-badge-plan"
-      : planText === "PLUS"
-        ? "cockpit-badge-plan cockpit-badge-plan--plus"
-        : "cockpit-badge-plan cockpit-badge-plan--free";
+    : isUltra
+      ? "cockpit-badge-plan cockpit-badge-plan--ultra"
+      : isPro
+        ? "cockpit-badge-plan"
+        : isPlus
+          ? "cockpit-badge-plan cockpit-badge-plan--plus"
+          : "cockpit-badge-plan cockpit-badge-plan--free";
+
+  const hasArgon = accountHasArgonTier(acc);
 
   return (
     <div className={`cockpit-card${acc.active ? " cockpit-card--active" : ""}`}>
@@ -96,6 +115,39 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
         </div>
         <div className="cockpit-card-badges">
           {acc.active && <span className="cockpit-badge-active">当前</span>}
+          {isAntigravity && (
+            hasArgon ? (
+              <span
+                className="badge"
+                style={{
+                  background: "rgba(168, 85, 247, 0.15)",
+                  color: "#c084fc",
+                  border: "1px solid rgba(168, 85, 247, 0.35)",
+                  fontSize: 10,
+                  fontWeight: 600,
+                  padding: "1px 5px",
+                }}
+                title="高阶账号: 支持 Gemini 4 Argon 及 Claude 5.5 (全模型)"
+              >
+                🌟 Argon+C5.5
+              </span>
+            ) : (
+              <span
+                className="badge"
+                style={{
+                  background: "rgba(59, 130, 246, 0.15)",
+                  color: "#60a5fa",
+                  border: "1px solid rgba(59, 130, 246, 0.35)",
+                  fontSize: 10,
+                  fontWeight: 600,
+                  padding: "1px 5px",
+                }}
+                title="基础账号: 仅支持 Gemini 3.8 Flash 与 Claude 4.6"
+              >
+                ⚡ Flash+C4.6
+              </span>
+            )
+          )}
           <span className={planClass}>{planText}</span>
         </div>
       </div>
@@ -103,7 +155,7 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
       {/* ── Card Body ── */}
       <div className="cockpit-card-body">
         {isAntigravity ? (
-          <AntigravityQuotaCard quota={acc.quota} pending={acc.quotaPending} />
+          <AntigravityQuotaCard quota={acc.quota} pending={acc.quotaPending} hideArgon={!hasArgon} plan={acc.plan} />
         ) : isGrok ? (
           /* xAI Grok Card Body */
           <div className="cockpit-codex-body">
@@ -326,6 +378,24 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
           >
             <IconTag style={{ width: 14, height: 14 }} />
           </button>
+          {onTestHealth && (
+            <button
+              type="button"
+              className="cockpit-icon-btn"
+              title="真实模型调用健康检测 (向上游发起极简 Prompt 探测真实可用性与连通性)"
+              disabled={isTestingHealth}
+              onClick={() => onTestHealth(acc)}
+            >
+              <IconActivity
+                style={{
+                  width: 14,
+                  height: 14,
+                  color: isTestingHealth ? "#f59e0b" : "#38bdf8",
+                }}
+                className={isTestingHealth ? "spin" : ""}
+              />
+            </button>
+          )}
           <button
             type="button"
             className="cockpit-icon-btn"

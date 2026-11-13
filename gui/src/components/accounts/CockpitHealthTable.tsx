@@ -1,7 +1,8 @@
 import React from "react";
-import type { UnifiedAccountItem } from "../../types/account";
+import { accountHasArgonTier, type UnifiedAccountItem } from "../../types/account";
 import { formatCockpitDate } from "./CockpitAccountCard";
 import {
+  IconActivity,
   IconCheck,
   IconCopy,
   IconPencil,
@@ -16,11 +17,15 @@ interface CockpitHealthTableProps {
   switchingId: string | null;
   refreshingId: string | null;
   copiedId: string | null;
+  testingHealthIds?: Set<string>;
+  isTestingAll?: boolean;
   formatEmail: (email: string) => string;
   onToggleSelectAll: () => void;
   onToggleSelectOne: (id: string) => void;
   onSwitch: (item: UnifiedAccountItem) => void;
   onRefresh: (item: UnifiedAccountItem) => void;
+  onTestHealth?: (item: UnifiedAccountItem) => void;
+  onTestAllHealth?: () => void;
   onEditAlias: (item: UnifiedAccountItem) => void;
   onCopy: (text: string, id: string) => void;
   onRemove: (item: UnifiedAccountItem) => void;
@@ -32,11 +37,15 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
   switchingId,
   refreshingId,
   copiedId,
+  testingHealthIds = new Set(),
+  isTestingAll = false,
   formatEmail,
   onToggleSelectAll,
   onToggleSelectOne,
   onSwitch,
   onRefresh,
+  onTestHealth,
+  onTestAllHealth,
   onEditAlias,
   onCopy,
   onRemove,
@@ -45,6 +54,24 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
 
   return (
     <div className="cockpit-table-wrap">
+      {onTestAllHealth && (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", borderBottom: "1px solid var(--border, rgba(255,255,255,0.08))", background: "rgba(255,255,255,0.02)" }}>
+          <div style={{ fontSize: 12, color: "var(--muted)" }}>
+            已就绪 <strong>{accounts.length}</strong> 个账号 · 支持区别显示高阶与基础配额，使用真实模型探测健康
+          </div>
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost"
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "#38bdf8", border: "1px solid rgba(56, 189, 248, 0.3)", borderRadius: 6, padding: "3px 10px", background: "rgba(56, 189, 248, 0.08)" }}
+            disabled={isTestingAll}
+            onClick={onTestAllHealth}
+            title="并发向上游发起真实模型 Prompt 探测，测试所有账号可用性"
+          >
+            <IconActivity style={{ width: 14, height: 14 }} className={isTestingAll ? "spin" : ""} />
+            <span>{isTestingAll ? "正在批量测试健康..." : "一键真实模型检测 (全部账号)"}</span>
+          </button>
+        </div>
+      )}
       <table className="cockpit-table">
         <thead>
           <tr>
@@ -71,6 +98,47 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
             const isCopied = copiedId === acc.id;
             const isSwitching = switchingId === acc.id;
             const isRefreshing = refreshingId === acc.id;
+            const isTestingHealth = testingHealthIds.has(acc.id);
+
+            // Antigravity quota breakdown
+            const windows = acc.quota?.customWindows ?? [];
+            const findWin = (prefix: string, isWeekly: boolean) => {
+              return windows.find(w => {
+                const l = w.label.toLowerCase();
+                const matches = l.startsWith(prefix.toLowerCase()) || l.includes(prefix.toLowerCase());
+                const weekly = l.includes("week");
+                return matches && (isWeekly ? weekly : !weekly);
+              });
+            };
+            const hasArgon = accountHasArgonTier(acc);
+
+            const getRemaining = (w?: (typeof windows)[0]) => {
+              if (!w) return 100;
+              const used = typeof w.percent === "number" && Number.isFinite(w.percent) ? w.percent : 0;
+              return Math.max(0, Math.min(100, Math.round(100 - used)));
+            };
+
+            const claWeeklyRem = getRemaining(findWin("cla", true));
+            const gemWeeklyRem = getRemaining(findWin("gem", true));
+            const argonWeeklyRem = hasArgon ? getRemaining(findWin("argon", true)) : null;
+
+            const pLower = (acc.plan ?? "").toLowerCase();
+            const isFree = pLower.includes("free");
+            const isUltra = pLower.includes("ultra");
+            const isPro = pLower.includes("pro") || pLower === "g1-pro-tier";
+            const isPlus = pLower.includes("plus");
+            const isGrok = acc.provider === "xai";
+            const planClass = isGrok
+              ? "cockpit-badge-plan cockpit-badge-plan--grok"
+              : isUltra
+                ? "cockpit-badge-plan cockpit-badge-plan--ultra"
+                : isPro
+                  ? "cockpit-badge-plan"
+                  : isPlus
+                    ? "cockpit-badge-plan cockpit-badge-plan--plus"
+                    : isFree
+                      ? "cockpit-badge-plan cockpit-badge-plan--free"
+                      : "cockpit-badge-plan cockpit-badge-plan--free";
 
             return (
               <tr key={`${acc.provider}:${acc.id}`}>
@@ -92,16 +160,63 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                   <span className="badge badge-muted">{acc.providerLabel}</span>
                 </td>
                 <td>
-                  <span className="cockpit-badge-plan">{acc.plan?.toUpperCase()}</span>
+                  <span className={planClass}>{acc.plan?.toUpperCase()}</span>
                 </td>
                 <td>
-                  <span
-                    className={`badge ${
-                      acc.health?.status === "healthy" ? "badge-green" : "badge-amber"
-                    }`}
-                  >
-                    {acc.health?.status ?? "healthy"}
-                  </span>
+                  {/* Real model health check status */}
+                  {isTestingHealth ? (
+                    <span className="badge badge-amber" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                      <IconRefresh style={{ width: 11, height: 11, animation: "spin 1s linear infinite" }} />
+                      <span>真实探测中...</span>
+                    </span>
+                  ) : acc.healthTest ? (
+                    acc.healthTest.ok ? (
+                      <span
+                        className="badge badge-green"
+                        style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}
+                        title={`真实模型调用: 200 OK (${acc.healthTest.model})\n响应耗时: ${Math.round(acc.healthTest.durationMs)}ms\n探测时间: ${new Date(acc.healthTest.testedAt).toLocaleTimeString()}`}
+                      >
+                        <span>● 200 OK</span>
+                        <span style={{ opacity: 0.8, fontSize: 10 }}>({Math.round(acc.healthTest.durationMs)}ms)</span>
+                      </span>
+                    ) : (
+                      <span
+                        className="badge"
+                        style={{
+                          background: acc.healthTest.status === 404 ? "rgba(245, 158, 11, 0.15)" : "rgba(239, 68, 68, 0.15)",
+                          color: acc.healthTest.status === 404 ? "#fbbf24" : "#f87171",
+                          border: `1px solid ${acc.healthTest.status === 404 ? "rgba(245, 158, 11, 0.3)" : "rgba(239, 68, 68, 0.3)"}`,
+                          cursor: "pointer",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                        }}
+                        title={`探测失败: ${acc.healthTest.message}\nHTTP ${acc.healthTest.status}\n模型: ${acc.healthTest.model}`}
+                      >
+                        <span>●</span>
+                        <span>
+                          {acc.healthTest.status === 403 || acc.healthTest.status === 401
+                            ? "403 权限失效"
+                            : acc.healthTest.status === 404
+                            ? "404 不支持"
+                            : acc.healthTest.status === 429
+                            ? "429 额度耗尽"
+                            : acc.healthTest.status === 504
+                            ? "504 超时"
+                            : `${acc.healthTest.status} 异常`}
+                        </span>
+                      </span>
+                    )
+                  ) : (
+                    <span
+                      className={`badge ${
+                        acc.health?.status === "healthy" ? "badge-green" : "badge-amber"
+                      }`}
+                      title="尚未发起本次会话真实调用探测，点击操作栏心跳图标测试"
+                    >
+                      {acc.health?.status ?? "healthy"}
+                    </span>
+                  )}
                 </td>
                 <td>
                   {acc.active ? (
@@ -110,9 +225,66 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                     <span style={{ color: "var(--muted)", fontSize: 12 }}>备用就绪</span>
                   )}
                 </td>
-                <td style={{ fontSize: 12, minWidth: 160 }}>
+                <td style={{ fontSize: 12, minWidth: 200 }}>
                   {acc.provider === "google-antigravity" ? (
-                    <span>Claude / Gemini 双配额正常</span>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                        {hasArgon ? (
+                          <span
+                            className="badge"
+                            style={{
+                              background: "rgba(168, 85, 247, 0.15)",
+                              color: "#c084fc",
+                              border: "1px solid rgba(168, 85, 247, 0.35)",
+                              fontSize: 11,
+                              fontWeight: 600,
+                              padding: "2px 6px",
+                            }}
+                            title="该账号支持 Gemini 4 Argon 及 Claude 5.5 (全模型)"
+                          >
+                            🌟 Argon + Claude 5.5
+                          </span>
+                        ) : (
+                          <span
+                            className="badge"
+                            style={{
+                              background: "rgba(59, 130, 246, 0.15)",
+                              color: "#60a5fa",
+                              border: "1px solid rgba(59, 130, 246, 0.35)",
+                              fontSize: 11,
+                              fontWeight: 600,
+                              padding: "2px 6px",
+                            }}
+                            title="该账号仅支持基础模型: Gemini 3.8 Flash 与 Claude 4.6"
+                          >
+                            ⚡ Flash + Claude 4.6
+                          </span>
+                        )}
+                        {argonWeeklyRem === 0 && (
+                          <span
+                            className="badge"
+                            style={{ background: "rgba(239, 68, 68, 0.15)", color: "#f87171", border: "1px solid rgba(239, 68, 68, 0.3)", fontSize: 10, padding: "1px 5px" }}
+                          >
+                            Argon周额用尽
+                          </span>
+                        )}
+                        {claWeeklyRem === 0 && (
+                          <span
+                            className="badge"
+                            style={{ background: "rgba(239, 68, 68, 0.15)", color: "#f87171", border: "1px solid rgba(239, 68, 68, 0.3)", fontSize: 10, padding: "1px 5px" }}
+                          >
+                            Claude周额用尽
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 11, color: "var(--muted)", display: "flex", gap: 10 }}>
+                        <span>Cla周: <strong style={{ color: claWeeklyRem > 20 ? "#34d399" : "#f87171" }}>{claWeeklyRem}%</strong></span>
+                        <span>Gem周: <strong style={{ color: gemWeeklyRem > 20 ? "#34d399" : "#f87171" }}>{gemWeeklyRem}%</strong></span>
+                        {argonWeeklyRem !== null && (
+                          <span>Argon周: <strong style={{ color: argonWeeklyRem > 0 ? "#c084fc" : "#f87171" }}>{argonWeeklyRem}%</strong></span>
+                        )}
+                      </div>
+                    </div>
                   ) : acc.provider === "xai" ? (
                     <span>
                       周配额剩余 {Math.max(0, Math.min(100, Math.round(100 - (acc.quota?.weeklyPercent ?? 0))))}%
@@ -128,6 +300,23 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                 </td>
                 <td style={{ textAlign: "right" }}>
                   <div className="cockpit-card-actions" style={{ justifyContent: "flex-end" }}>
+                    {/* Real model health test button */}
+                    <button
+                      type="button"
+                      className="cockpit-icon-btn"
+                      title="真实模型调用健康检测 (向上游发起极简 Prompt 探测真实可用性与连通性)"
+                      disabled={isTestingHealth}
+                      onClick={() => onTestHealth?.(acc)}
+                    >
+                      <IconActivity
+                        style={{
+                          width: 14,
+                          height: 14,
+                          color: isTestingHealth ? "#f59e0b" : "#38bdf8",
+                        }}
+                        className={isTestingHealth ? "spin" : ""}
+                      />
+                    </button>
                     <button
                       type="button"
                       className={`cockpit-icon-btn ${acc.active ? "cockpit-icon-btn--active" : "cockpit-icon-btn--primary"}`}
@@ -205,4 +394,3 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
     </div>
   );
 };
-
