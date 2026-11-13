@@ -99,6 +99,10 @@ const ANTIGRAVITY_PICKER_MODEL_BY_WIRE_ID: Record<string, string> = {
   "gemini-4-argon-low": GEMINI_ARGON,
   "gemini-4-argon-medium": GEMINI_ARGON,
   "gemini-4-argon-high": GEMINI_ARGON,
+  "gemini-4-hydrogen-low": "gemini-4-hydrogen",
+  "gemini-4-hydrogen-medium": "gemini-4-hydrogen",
+  "gemini-4-hydrogen-high": "gemini-4-hydrogen",
+  "gemini-4-hydrogen-xhigh": "gemini-4-hydrogen",
   "gemini-3.8-flash-low": "gemini-3.8-flash",
   "gemini-3.8-flash-medium": "gemini-3.8-flash",
   "gemini-3.8-flash-high": "gemini-3.8-flash",
@@ -190,6 +194,7 @@ export const ANTIGRAVITY_MODEL_EFFORTS: Record<string, string[]> = {
   // No `minimal`: Google documents it as an error for this generation, and CCA exposes only
   // the three tiers. Argon documents the same ladder (`minimal` is an HTTP 400).
   [GEMINI_ARGON]: ["low", "medium", "high"],
+  "gemini-4-hydrogen": ["low", "medium", "high", "xhigh"],
   "gemini-3.8-flash": ["low", "medium", "high"],
   [CLAUDE_OPUS_55]: ["low", "medium", "high"],
   [CLAUDE_SONNET_55]: ["low", "medium", "high"],
@@ -207,6 +212,12 @@ const ANTIGRAVITY_EFFORT_WIRE_MAP: Record<string, Record<string, string>> = {
     low: "gemini-4-argon-low",
     medium: "gemini-4-argon-medium",
     high: "gemini-4-argon-high",
+  },
+  "gemini-4-hydrogen": {
+    low: "gemini-4-hydrogen-low",
+    medium: "gemini-4-hydrogen-medium",
+    high: "gemini-4-hydrogen-high",
+    xhigh: "gemini-4-hydrogen-xhigh",
   },
   // Claude 5.5 publishes the same per-tier suffix family.
   [CLAUDE_OPUS_55]: {
@@ -241,7 +252,7 @@ const ANTIGRAVITY_EFFORT_WIRE_MAP: Record<string, Record<string, string>> = {
  * `gemini-3.1-pro` is deliberately absent: its `high` rung is `gemini-pro-agent`, which carries
  * no tier suffix, so there the level is the only thing naming the effort.
  */
-const ANTIGRAVITY_SUFFIX_TIER_MODELS = new Set([GEMINI_ARGON, "gemini-3.8-flash", CLAUDE_OPUS_55, CLAUDE_SONNET_55]);
+const ANTIGRAVITY_SUFFIX_TIER_MODELS = new Set([GEMINI_ARGON, "gemini-4-hydrogen", "gemini-3.8-flash", CLAUDE_OPUS_55, CLAUDE_SONNET_55]);
 
 /**
  * Suffix-tier models that withhold `thought: true` text unless the request ALSO names its tier
@@ -313,6 +324,7 @@ export function discoveredAntigravityDefaultEffort(modelId: string, hasMedium: b
 const ANTIGRAVITY_DEFAULT_EFFORT: Record<string, string> = {
   // Google's documented thinking_level default, and the tier CCA marks `recommended`.
   [GEMINI_ARGON]: "medium",
+  "gemini-4-hydrogen": "high",
   "gemini-3.8-flash": "medium",
   // Matches the discovered-family default (medium), so static and live resolution agree.
   [CLAUDE_OPUS_55]: "medium",
@@ -397,6 +409,7 @@ export const ANTIGRAVITY_MODELS = [
  */
 export const ANTIGRAVITY_KNOWN_PICKER_MODELS: readonly string[] = [
   ...ANTIGRAVITY_MODELS,
+  "gemini-4-hydrogen",
   GEMINI_FLASH_PREVIOUS,
   "gemini-3.1-pro",
   "gemini-3.1-flash-image",
@@ -420,6 +433,10 @@ const ANTIGRAVITY_WIRE_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "gemini-4-argon-low": 1_048_576,
   "gemini-4-argon-medium": 1_048_576,
   "gemini-4-argon-high": 1_048_576,
+  "gemini-4-hydrogen-low": 1_048_576,
+  "gemini-4-hydrogen-medium": 1_048_576,
+  "gemini-4-hydrogen-high": 1_048_576,
+  "gemini-4-hydrogen-xhigh": 1_048_576,
   "gemini-3.8-flash-low": 1_048_576,
   "gemini-3.8-flash-medium": 1_048_576,
   "gemini-3.8-flash-high": 1_048_576,
@@ -435,6 +452,7 @@ const ANTIGRAVITY_WIRE_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 export const ANTIGRAVITY_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Collapsed base IDs — explicit entries for the picker.
   [GEMINI_ARGON]: 1_048_576,
+  "gemini-4-hydrogen": 1_048_576,
   "gemini-3.8-flash": 1_048_576,
   [CLAUDE_OPUS_55]: 1_000_000,
   [CLAUDE_SONNET_55]: 1_000_000,
@@ -452,6 +470,7 @@ export const ANTIGRAVITY_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 
 export const ANTIGRAVITY_MODEL_INPUT_MODALITIES: Record<string, string[]> = {
   [GEMINI_ARGON]: ["text", "image"],
+  "gemini-4-hydrogen": ["text", "image"],
   [CLAUDE_OPUS_55]: ["text", "image"],
   [CLAUDE_SONNET_55]: ["text", "image"],
   // Google documents 3.7 Flash as also accepting video, audio and PDF, but this proxy
@@ -931,5 +950,5 @@ export function isAntigravityExclusiveTierModel(modelId: string | null | undefin
   if (!modelId) return false;
   const id = modelId.trim();
   const canonical = canonicalAntigravityUsageModel(Object.hasOwn(ANTIGRAVITY_MODEL_ALIASES, id) ? ANTIGRAVITY_MODEL_ALIASES[id]! : id);
-  return canonical === "gemini-4-argon" || canonical === "claude-opus-5-5" || canonical === "claude-sonnet-5-5";
+  return canonical === "gemini-4-argon" || canonical === "gemini-4-hydrogen" || canonical === "claude-opus-5-5" || canonical === "claude-sonnet-5-5";
 }

@@ -427,10 +427,8 @@ export async function prepareAdapterExchange(
             }),
           }));
       } catch (dispatchErr) {
-        if (!options.abortSignal?.aborted
-          && transportState.genericFailoverAccountId
-          && transportState.genericFailovers < transportState.genericFailoverLimit
-          && isGenericOAuthFailoverEnabled(config, route.providerName)
+        if (!options.abortSignal?.aborted && transportState.genericFailoverAccountId
+          && transportState.genericFailovers < transportState.genericFailoverLimit && isGenericOAuthFailoverEnabled(config, route.providerName)
         ) {
           const isTimeout = dispatchErr instanceof Error && (dispatchErr.name === "TimeoutError" || dispatchErr.message?.includes("timed out"));
           upstreamResponse = formatErrorResponse(isTimeout ? 504 : 502, "upstream_error", describeUpstreamConnectFailure(dispatchErr, connectMs));
@@ -1566,10 +1564,7 @@ export async function prepareAdapterExchange(
       }
       } else {
       while (
-        (upstreamResponse.status === 429
-          || upstreamResponse.status === 502
-          || upstreamResponse.status === 503
-          || upstreamResponse.status === 504)
+        (upstreamResponse.status === 429 || (upstreamResponse.status >= 502 && upstreamResponse.status <= 504))
         && transportState.genericFailoverAccountId
         && transportState.genericFailovers < transportState.genericFailoverLimit
         && isGenericOAuthFailoverEnabled(config, route.providerName)

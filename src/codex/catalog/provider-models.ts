@@ -849,6 +849,11 @@ export async function fetchProviderModelsWithAuth(
             contextWindow: 1048576, inputModalities: ["text", "image"],
           },
           {
+            id: "gemini-4-hydrogen", wireModelId: "gemini-4-hydrogen",
+            effortWireModelIds: { low: "gemini-4-hydrogen-low", medium: "gemini-4-hydrogen-medium", high: "gemini-4-hydrogen-high", xhigh: "gemini-4-hydrogen-xhigh" },
+            contextWindow: 1048576, inputModalities: ["text", "image"],
+          },
+          {
             id: "claude-opus-5-5", wireModelId: "claude-opus-5-5",
             effortWireModelIds: { low: "claude-opus-5-5-low", medium: "claude-opus-5-5-medium", high: "claude-opus-5-5-high" },
             contextWindow: 1000000, inputModalities: ["text", "image"],
