@@ -1034,6 +1034,11 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     return jsonResponse({ ok: true, cleared });
   }
 
+  if (url.pathname === "/api/oauth/accounts/test-health" && req.method === "POST") {
+    const { handleOAuthAccountHealthTest } = await import("./oauth-account-health-test");
+    return handleOAuthAccountHealthTest(req, config);
+  }
+
   if (url.pathname === "/api/oauth/accounts/import" && req.method === "POST") {
     const controller = new AbortController();
     const abortRequest = () => controller.abort();

@@ -358,6 +358,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/keys/rotate", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/keys/rotate/commit", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/oauth/accounts/clear-cooldown", module: "server/management/oauth-account-routes", mutates: true },
+  { method: "POST", path: "/api/oauth/accounts/test-health", module: "server/management/oauth-account-routes", mutates: true, exempt: { reason: "interactive-preview", why: "Account health probe using real model completion from GUI dashboard" } },
   { method: "POST", path: "/api/oauth/accounts/import", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/oauth/login", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/oauth/login/cancel", module: "server/management/oauth-account-routes", mutates: true },
