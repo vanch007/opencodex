@@ -328,8 +328,9 @@ export function preferKiroModelSupport(
       if (explicit && ids.includes(explicit)) return [explicit];
     }
     const positive = ids.filter(id => accountListsModel(providerName, id, model) === true);
-    if (positive.length) return positive;
-    return ids.filter(id => accountListsModel(providerName, id, model) !== false);
+    const modelMatched = positive.length ? positive : ids.filter(id => accountListsModel(providerName, id, model) !== false);
+    const nonExhausted = modelMatched.filter(id => !isAccountQuotaExhausted(providerName, id, model));
+    return nonExhausted.length ? nonExhausted : modelMatched;
   }
   if (providerName !== "kiro") return ids;
   const cap = config?.providers?.kiro?.oauthAccountFailover?.maxConcurrentPerAccount;
@@ -401,7 +402,10 @@ export function routeAntigravityModel(
   const ready = new Set(eligibleFailoverAccounts(providerName, now, classifyModelFamilyForQuota(providerName, model)));
   const rank = (id: string) => (ready.has(id) ? 0 : 2) + (accountListsModel(providerName, id, model) === true ? 0 : 1);
   const tier = Math.min(...serving.map(rank));
-  const best = rankAntigravityModelAccounts(config, serving.filter(id => rank(id) === tier), model, now)[0]!;
+  // Same exhaustion preference as the initial pick: a listing account whose quota family is
+  // spent loses to one with headroom, unless every candidate in the tier is spent.
+  const candidates = preferKiroModelSupport(providerName, serving.filter(id => rank(id) === tier), model, config);
+  const best = rankAntigravityModelAccounts(config, candidates, model, now)[0]!;
   return { kind: "reroute", accountId: best };
 }
 
@@ -411,7 +415,8 @@ function rankAntigravityModelAccounts(config: OcxConfig, ids: string[], model: s
   const rows = new Map((getAccountSet(provider)?.accounts ?? []).map(row => [row.id, row]));
   const strategy = activeGenericStrategy(config, provider);
   if (strategy === "round-robin") {
-    const best = peekRoundRobinAccount(genericPoolKey(provider), ids, genericStickyLimit(config, provider));
+    const poolKey = genericPoolKey(provider, classifyModelFamilyForQuota(provider, model));
+    const best = peekRoundRobinAccount(poolKey, ids, genericStickyLimit(config, provider));
     return best ? [best, ...ids.filter(id => id !== best)] : ids;
   }
   if (strategy === "fill-first") return stableGenericRoster(provider).filter(id => ids.includes(id));
@@ -506,16 +511,44 @@ export function rotateAntigravityAccountOnAuthRefusal(
   const set = getAccountSet("google-antigravity");
   if (!set || set.accounts.length < 2) return null;
   const family = classifyModelFamilyForQuota("google-antigravity", requestedModelId);
+  coolAntigravityAccount(set, failedAccountId, sentGeneration, family, now, {
+    cooldownUntil: now + DEFAULT_COOLDOWN_MS, cooldownSource: "auth", identity: sentGeneration,
+  });
+  return nextAntigravitySibling(set, failedAccountId, requestedModelId, family, now);
+}
+
+/**
+ * The one cooldown write both Antigravity sibling rotations (403 refusal, 5xx fault) share. It is
+ * fenced on the sent credential generation, so a re-login that landed mid-request is never cooled,
+ * and it never shortens a cooldown already running for the same account and family: a 15-second
+ * fault window must not cut short a 60-second refusal or a quota cooldown.
+ */
+function coolAntigravityAccount(
+  set: NonNullable<ReturnType<typeof getAccountSet>>,
+  failedAccountId: string,
+  sentGeneration: string,
+  family: QuotaModelFamily | undefined,
+  now: number,
+  entry: AccountHealth,
+): void {
   const failed = set.accounts.find(row => row.id === failedAccountId);
-  if (failed && credentialGeneration(failed.credential) === sentGeneration) {
-    health.set(healthKey("google-antigravity", failedAccountId, family), {
-      cooldownUntil: now + DEFAULT_COOLDOWN_MS,
-      cooldownSource: "auth",
-      identity: sentGeneration,
-    });
-    presence.delete("google-antigravity");
-    sweepExpiredOnWrite(now);
-  }
+  if (!failed || credentialGeneration(failed.credential) !== sentGeneration) return;
+  const key = healthKey("google-antigravity", failedAccountId, family);
+  if (isCooled("google-antigravity", failedAccountId, now, family)
+    && (health.get(key)?.cooldownUntil ?? 0) >= entry.cooldownUntil) return;
+  health.set(key, entry);
+  presence.delete("google-antigravity");
+  sweepExpiredOnWrite(now);
+}
+
+/** Next live sibling after the failed account, in roster order, honouring cooldowns and model support. */
+function nextAntigravitySibling(
+  set: NonNullable<ReturnType<typeof getAccountSet>>,
+  failedAccountId: string,
+  requestedModelId: string | null | undefined,
+  family: QuotaModelFamily | undefined,
+  now: number,
+): string | null {
   const eligible = new Set(preferKiroModelSupport("google-antigravity",
     eligibleIdsIn(set, "google-antigravity", now, family).filter(id => id !== failedAccountId), requestedModelId));
   const order = set.accounts.map(row => row.id);
@@ -523,6 +556,31 @@ export function rotateAntigravityAccountOnAuthRefusal(
   const ring = start >= 0 ? [...order.slice(start + 1), ...order.slice(0, start)] : order;
   return rankAccountsByHeadroom("google-antigravity",
     ring.filter(id => id !== failedAccountId && eligible.has(id)), requestedModelId)[0] ?? null;
+}
+
+/**
+ * A 502/503/504 that survived the same-account retry ladder says this account's route to Google is
+ * failing right now, not that the credential is bad. Cool it for a short, fixed window (pool-wide
+ * capacity trouble then clears on its own within seconds) and name a live sibling to replay on.
+ * No stored verdict: nothing here outlives the process or the window.
+ */
+const ANTIGRAVITY_FAULT_COOLDOWN_MS = 15_000;
+
+export function rotateAntigravityAccountOnUpstreamFault(
+  poolActivated: boolean,
+  failedAccountId: string,
+  sentGeneration: string,
+  requestedModelId: string | null | undefined,
+  now = Date.now(),
+): string | null {
+  if (!poolActivated) return null;
+  const set = getAccountSet("google-antigravity");
+  if (!set || set.accounts.length < 2) return null;
+  const family = classifyModelFamilyForQuota("google-antigravity", requestedModelId);
+  coolAntigravityAccount(set, failedAccountId, sentGeneration, family, now, {
+    cooldownUntil: now + ANTIGRAVITY_FAULT_COOLDOWN_MS, cooldownSource: "default",
+  });
+  return nextAntigravitySibling(set, failedAccountId, requestedModelId, family, now);
 }
 
 /** Generic pool strategies the kernel can actually run. `quota` IS the pre-kernel path. */
@@ -641,10 +699,15 @@ export function noteGenericPoolSelection(
   requestedModelId?: string | null,
 ): void {
   if (activeGenericStrategy(config, providerName) !== "round-robin") return;
-  const poolKey = genericPoolKey(providerName);
-  const limit = genericStickyLimit(config, providerName);
   const family = classifyModelFamilyForQuota(providerName, requestedModelId);
-  const allEligible = preferKiroModelSupport(providerName, eligibleFailoverAccounts(providerName, Date.now(), family), requestedModelId, config);
+  const poolKey = genericPoolKey(providerName, family);
+  const limit = genericStickyLimit(config, providerName);
+  const allEligible = preferKiroModelSupport(
+    providerName,
+    eligibleFailoverAccounts(providerName, Date.now(), family),
+    requestedModelId,
+    config,
+  );
   const nonExhausted = allEligible.filter(id => !isAccountQuotaExhausted(providerName, id, requestedModelId));
   const eligible = nonExhausted.length > 0 ? nonExhausted : allEligible;
   const picked = pickRoundRobinAccount(poolKey, eligible, limit);
@@ -805,7 +868,7 @@ function pickGenericOAuthFailoverAccount(
     // PICK here, not peek: the failure already happened and this answer is the one being used,
     // so the ring genuinely advances. A caller that only asks whether a sibling exists peeks.
     return (commit ? pickRoundRobinAccount : peekRoundRobinAccount)(
-      genericPoolKey(providerName),
+      genericPoolKey(providerName, family),
       candidates,
       genericStickyLimit(config, providerName),
     );
@@ -951,7 +1014,7 @@ export function preferredInitialAccount(
     // PEEK, not pick: this proposal is discardable, and advancing the ring for an account the
     // resolver then rejects would skip a turn for nothing. noteGenericPoolSelection commits.
     const picked = peekRoundRobinAccount(
-      genericPoolKey(providerName),
+      genericPoolKey(providerName, family),
       candidates,
       genericStickyLimit(config, providerName),
     );
@@ -1021,6 +1084,13 @@ export function genericFailoverRetryAfterSeconds(providerName: string, now = Dat
     if (earliest === null || entry.cooldownUntil < earliest) earliest = entry.cooldownUntil;
   }
   return earliest === null ? null : Math.max(1, Math.ceil((earliest - now) / 1000));
+}
+
+/** A manual selection must win in every ring a request can read, including the per-family ones. */
+export function seedGenericPoolSelection(providerName: string, accountId: string): void {
+  seedPoolRotationAccount(genericPoolKey(providerName), accountId);
+  if (providerName !== "google-antigravity") return;
+  for (const family of ["gem", "cla"] satisfies QuotaModelFamily[]) seedPoolRotationAccount(genericPoolKey(providerName, family), accountId);
 }
 
 /** Test seam and manual-recovery hook. */
