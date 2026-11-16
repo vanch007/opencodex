@@ -15,7 +15,7 @@ describe("non-OpenAI tool catalog nudge", () => {
     expect(note).toContain("Valid tool names for this turn are exactly `exec_command`, `mcp__fs__read_file`");
     expect(note).toContain("These listed names are the complete top-level tool-call surface for this turn");
     expect(note).toContain("do not invent, translate, or rename tools");
-    expect(note).toContain("Names mentioned only in instructions, tool descriptions, argument descriptions, or nested helper APIs are not additional top-level tools");
+    expect(note).toContain("Names that appear only in instructions, tool descriptions, argument descriptions, or nested helper APIs are not extra top-level tools");
     expect(note).toContain("call the listed parent tool and use those helpers only inside that tool's input");
     expect(note).toContain("Count a tool call only after its tool result returns");
   });
@@ -66,7 +66,7 @@ describe("non-OpenAI tool catalog nudge", () => {
 
     expect(note).toContain("Valid tool names for this turn are exactly `exec`, `wait`, `request_user_input`");
     expect(note).toContain("complete top-level tool-call surface");
-    expect(note).toContain("nested helper APIs are not additional top-level tools");
+    expect(note).toContain("nested helper APIs are not extra top-level tools");
     expect(note).toContain("`exec` is Codex code mode");
     expect(note).toContain("await tools.<name>(...)");
     expect(note).toContain("await tools.codex_app__list_threads({})");
@@ -258,5 +258,19 @@ describe("non-OpenAI tool catalog nudge", () => {
       expect(note).toContain(CODE_MODE_RESULT_ECHO_SENTENCE);
       expect(EMPTY_EXEC_OUTPUT_MESSAGE).toContain("text(...)");
     });
+  });
+
+  // Cloud Code Assist returns HTTP 429 RESOURCE_EXHAUSTED when systemInstruction contains the
+  // literal sentence "Names mentioned only in instructions, ... are not additional top-level tools." (#8772).
+  test("never emits the Cloud Code Assist 429-blocked nudge phrasing (#8772)", () => {
+    const flatNote = buildNonOpenAIToolCatalogNudgeFromNames(["get_time"]);
+    const codeModeNote = buildNonOpenAIToolCatalogNudgeForTools([codeModeExec(), { name: "wait", parameters: {} } as OcxTool]);
+
+    for (const note of [flatNote, codeModeNote]) {
+      if (!note) throw new Error("Expected a tool catalog nudge");
+      expect(note).not.toContain("Names mentioned only in instructions");
+      expect(note).not.toContain("not additional top-level tools");
+      expect(note).toContain("Names that appear only in instructions, tool descriptions, argument descriptions, or nested helper APIs are not extra top-level tools.");
+    }
   });
 });
