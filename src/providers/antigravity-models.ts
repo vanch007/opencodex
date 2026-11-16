@@ -955,5 +955,5 @@ export function isAntigravityExclusiveTierModel(modelId: string | null | undefin
   if (!modelId) return false;
   const id = modelId.trim();
   const canonical = canonicalAntigravityUsageModel(Object.hasOwn(ANTIGRAVITY_MODEL_ALIASES, id) ? ANTIGRAVITY_MODEL_ALIASES[id]! : id);
-  return canonical === "gemini-4-argon" || canonical === "gemini-4-hydrogen" || canonical === "claude-opus-5-5" || canonical === "claude-sonnet-5-5";
+  return canonical === "gemini-4-argon" || canonical === "gemini-4-carbon" || canonical === "claude-opus-5-5" || canonical === "claude-sonnet-5-5";
 }

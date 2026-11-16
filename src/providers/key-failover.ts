@@ -244,6 +244,85 @@ function isRealCalendarDate(value: string): boolean {
   return day <= lengths[month - 1]!;
 }
 
+function nextPacificMidnightMs(now = Date.now()): number {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric", month: "numeric", day: "numeric",
+    hour: "numeric", minute: "numeric", second: "numeric",
+    hour12: false,
+  });
+  const parts = formatter.formatToParts(new Date(now));
+  const getPart = (type: string) => Number(parts.find(p => p.type === type)?.value ?? 0);
+  const hour = getPart("hour") % 24;
+  const minute = getPart("minute");
+  const second = getPart("second");
+  const msUntilMidnight = ((24 - hour) * 3600 - minute * 60 - second) * 1000;
+  const resetAt = now + (msUntilMidnight > 0 ? msUntilMidnight : 24 * 3600 * 1000);
+  return Math.min(resetAt, now + MAX_QUOTA_COOLDOWN_MS);
+}
+
+function parseGoogleQuotaResetMs(error: unknown, now: number): number | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const status = (error as { status?: unknown }).status;
+  const code = (error as { code?: unknown }).code;
+  const message = typeof (error as { message?: unknown }).message === "string" ? (error as { message: string }).message : "";
+  const details = Array.isArray((error as { details?: unknown }).details) ? (error as { details: unknown[] }).details : [];
+
+  if (code !== 429 && code !== "429" && status !== "RESOURCE_EXHAUSTED") {
+    return undefined;
+  }
+
+  // 1. Explicit retryDelay in RetryInfo
+  for (const item of details) {
+    if (item && typeof item === "object") {
+      const delay = (item as { retryDelay?: unknown }).retryDelay;
+      if (typeof delay === "string") {
+        const match = /^([0-9]+(?:\.[0-9]+)?)s?$/i.exec(delay.trim());
+        if (match) {
+          const seconds = parseFloat(match[1]);
+          if (seconds > 0) return Math.min(now + Math.round(seconds * 1000), now + MAX_QUOTA_COOLDOWN_MS);
+        }
+      }
+    }
+  }
+
+  // 2. Daily quota exhaustion (Queries per day / Tokens per day / RPD / TPD)
+  let isDailyQuota = /per\s*day|daily|queries\s*per\s*day|tokens\s*per\s*day/i.test(message);
+  if (!isDailyQuota) {
+    for (const item of details) {
+      if (item && typeof item === "object") {
+        const metadata = (item as { metadata?: unknown }).metadata;
+        if (metadata && typeof metadata === "object") {
+          const limit = String((metadata as Record<string, unknown>).quota_limit ?? "");
+          const metric = String((metadata as Record<string, unknown>).quota_metric ?? "");
+          if (/per\s*day|daily/i.test(limit) || /per\s*day|daily/i.test(metric)) {
+            isDailyQuota = true;
+            break;
+          }
+        }
+        const violations = (item as { violations?: unknown }).violations;
+        if (Array.isArray(violations)) {
+          for (const v of violations) {
+            if (v && typeof v === "object" && typeof (v as { description?: unknown }).description === "string") {
+              if (/per\s*day|daily/i.test((v as { description: string }).description)) {
+                isDailyQuota = true;
+                break;
+              }
+            }
+          }
+          if (isDailyQuota) break;
+        }
+      }
+    }
+  }
+
+  if (isDailyQuota) {
+    return nextPacificMidnightMs(now);
+  }
+
+  return undefined;
+}
+
 export function parseQuotaResetAt(body: string | null | undefined, now = Date.now()): number | undefined {
   const text = body?.slice(0, QUOTA_RESET_SCAN_BYTES);
   if (!text) return undefined;
@@ -256,6 +335,11 @@ export function parseQuotaResetAt(body: string | null | undefined, now = Date.no
   if (!parsed || typeof parsed !== "object") return undefined;
   const error = (parsed as { error?: unknown }).error;
   if (!error || typeof error !== "object") return undefined;
+
+  // Google AI Studio / Generative Language API 429 quota exhaustion & daily limits
+  const googleReset = parseGoogleQuotaResetMs(error, now);
+  if (googleReset !== undefined) return googleReset;
+
   const code = (error as { code?: unknown }).code;
   const message = (error as { message?: unknown }).message;
   if ((code !== "rate_limit_error" && code !== 429) || typeof message !== "string") return undefined;
