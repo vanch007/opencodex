@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { accountHasArgonTier, type UnifiedAccountItem } from "../types/account";
+import { accountHasArgonTier, accountIsUnusable, type UnifiedAccountItem } from "../types/account";
 import { confirmAction, requestTextValue } from "../action-dialogs";
 import AddCodexAccountModal from "../components/AddCodexAccountModal";
 import { useCopyFeedback } from "../components/use-copy-feedback";
 import { CockpitAccountCard } from "../components/accounts/CockpitAccountCard";
 import { CockpitHeader } from "../components/accounts/CockpitHeader";
 import { CockpitToolbar } from "../components/accounts/CockpitToolbar";
+import { AccountTipLayer } from "../components/accounts/AccountTipLayer";
 import { CockpitHealthTable } from "../components/accounts/CockpitHealthTable";
 import { IconPlus, IconRefresh, IconUser } from "../icons";
 import { openBrowserRequestField } from "../oauth-open-browser-pref";
@@ -281,13 +282,15 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
           message: string;
           paused?: boolean;
         };
-        const willBePaused = result.paused ?? (result.status === 403 || result.status === 401);
+        const nextPaused = result.ok
+          ? (result.paused ?? false)
+          : (result.paused ?? (result.status === 403 || result.status === 401 ? true : undefined));
         setAccounts(prev =>
           prev.map(a =>
             a.id === item.id && a.provider === item.provider
               ? {
                   ...a,
-                  paused: willBePaused ? true : a.paused,
+                  paused: nextPaused ?? a.paused,
                   health: {
                     status: result.ok
                       ? "healthy"
@@ -332,7 +335,7 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
   const handlePauseAllUnusable = async () => {
     if (isBatchPausing) return;
     const unusableAccounts = displayedAccounts.filter(
-      a => !a.paused && ((a.healthTest && !a.healthTest.ok) || a.health?.status === "reauth_required"),
+      a => !a.paused && accountIsUnusable(a),
     );
     if (unusableAccounts.length === 0) return;
     setIsBatchPausing(true);
@@ -355,6 +358,7 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
     if (isTestingAll || displayedAccounts.length === 0) return;
     setIsTestingAll(true);
     try {
+      // Paused accounts are probed too: still banned stays paused, recovered ones are resumed.
       const queue = [...displayedAccounts];
       while (queue.length > 0) {
         const batch = queue.splice(0, 3);
@@ -478,8 +482,8 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
           if (!emailMatch && !aliasMatch && !idMatch) return false;
         }
         if (statusFilter === "active" && !acc.active) return false;
-        if (statusFilter === "ready" && (acc.paused || acc.active || (acc.healthTest && !acc.healthTest.ok) || acc.health?.status === "reauth_required")) return false;
-        if (statusFilter === "unusable" && (!acc.paused && !(acc.healthTest && !acc.healthTest.ok) && acc.health?.status !== "reauth_required")) return false;
+        if (statusFilter === "ready" && (acc.paused || acc.active || accountIsUnusable(acc))) return false;
+        if (statusFilter === "unusable" && !acc.paused && !accountIsUnusable(acc)) return false;
         if (statusFilter === "paused" && !acc.paused) return false;
         if (statusFilter === "reauth" && acc.health?.status !== "reauth_required") return false;
 
@@ -542,6 +546,7 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
 
   return (
     <div className="cockpit-accounts-page">
+      <AccountTipLayer />
       {/* ── Cockpit Header ── */}
       <CockpitHeader
         totalCount={accounts.length}
@@ -664,7 +669,7 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
           <span style={{ fontSize: 15, fontWeight: 600 }}>未找到匹配的账号</span>
           <span style={{ fontSize: 13 }}>尝试切换提供方标签或点击“+”授权新账户</span>
           <button
-            type="button"
+            type="button" data-tip="添加新账号"
             className="cockpit-round-btn cockpit-round-btn--primary"
             style={{ marginTop: 8 }}
             onClick={() => setShowAddMenu(true)}
@@ -750,7 +755,7 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <h3 style={{ margin: 0, fontSize: 16 }}>账号详情</h3>
               <button
-                type="button"
+                type="button" data-tip="关闭详情"
                 className="cockpit-icon-btn"
                 onClick={() => setInfoModalAccount(null)}
               >

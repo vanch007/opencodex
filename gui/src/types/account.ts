@@ -34,6 +34,15 @@ export interface UnifiedAccountItem {
   resetCount?: number;
 }
 
+/**
+ * An account that probes as unusable (banned, revoked, needs re-login) and should be paused.
+ * Quota exhaustion (HTTP 429) is NOT unusable: the account is healthy and recovers on reset.
+ */
+export function accountIsUnusable(acc: Pick<UnifiedAccountItem, "healthTest" | "health">): boolean {
+  const failed = acc.healthTest !== undefined && !acc.healthTest.ok && acc.healthTest.status !== 429;
+  return failed || acc.health?.status === "reauth_required";
+}
+
 /** Gemini 4 Argon + Claude 5.5 are Pro/Ultra only; a free tier never has them, whatever the quota summary lists. */
 export function accountHasArgonTier(acc: Pick<UnifiedAccountItem, "plan" | "quota">): boolean {
   if ((acc.plan ?? "").toLowerCase().includes("free")) return false;

@@ -3,6 +3,7 @@ import { jsonResponse } from "../auth-cors";
 import { readManagementJsonBody } from "./body";
 import { getAccountCredentialWithStatus } from "../../oauth/store";
 import { getValidAccessTokenForAccount } from "../../oauth";
+import { refreshAntigravityToken } from "../../oauth/google-antigravity";
 import { createGoogleAdapter } from "../../adapters/google";
 import { clearGenericFailoverHealthForAccount } from "../../oauth/generic-account-failover";
 import { createTranslatorBudget } from "../../lib/translator-budget";
@@ -49,7 +50,20 @@ export async function handleOAuthAccountHealthTest(
     const startTime = Date.now();
 
     try {
-      const token = await getValidAccessTokenForAccount("google-antigravity", accountId);
+      // Bypass getValidAccessTokenForAccount's pause guard for paused accounts so manual/health
+      // probes hit upstream and surface the real status (e.g. 403 TOS ban) instead of a 500 error.
+      let token: string | undefined;
+      try {
+        token = row.paused
+          ? (row.credential.access && row.credential.expires > Date.now() + 60_000
+              ? row.credential.access
+              : (await refreshAntigravityToken(row.credential.refresh)).access)
+          : await getValidAccessTokenForAccount("google-antigravity", accountId);
+      } catch (tokenError) {
+        // A paused account whose token cannot be refreshed is still unusable: keep it paused.
+        if (!row.paused) throw tokenError;
+        token = undefined;
+      }
       if (!token) {
         return jsonResponse({
           ok: false,
@@ -59,6 +73,7 @@ export async function handleOAuthAccountHealthTest(
           errorCode: "reauth_required",
           message: "获取 Token 失败，账号可能需要重新登录授权",
           accountEmail: email,
+          ...(row.paused ? { paused: true } : {}),
         } satisfies AccountHealthTestResult, 200);
       }
 
@@ -101,13 +116,25 @@ export async function handleOAuthAccountHealthTest(
       if (res.ok) {
         // Clear any prior cooldown/rate error on verified healthy status
         clearGenericFailoverHealthForAccount("google-antigravity", accountId);
+        // A previously paused account that now answers 200 is no longer banned: resume it.
+        let resumed = false;
+        if (row.paused) {
+          try {
+            const { setAccountPaused } = await import("../../oauth/store");
+            await setAccountPaused(provider, accountId, false);
+            resumed = true;
+          } catch {
+            // keep paused if resume could not be persisted
+          }
+        }
         return jsonResponse({
           ok: true,
           status: res.status,
           durationMs,
           model: testModel,
-          message: `模型真实调用正常 (${durationMs}ms)`,
+          message: resumed ? `账号已恢复可用，已自动启用 (${durationMs}ms)` : `模型真实调用正常 (${durationMs}ms)`,
           accountEmail: email,
+          ...(row.paused ? { paused: !resumed } : {}),
         } satisfies AccountHealthTestResult, 200);
       }
 
@@ -146,7 +173,7 @@ export async function handleOAuthAccountHealthTest(
         errorCode,
         message,
         accountEmail: email,
-        ...(autoPaused ? { paused: true } : {}),
+        ...(autoPaused || row.paused ? { paused: true } : {}),
       } satisfies AccountHealthTestResult, 200);
     } catch (error) {
       const durationMs = Date.now() - startTime;

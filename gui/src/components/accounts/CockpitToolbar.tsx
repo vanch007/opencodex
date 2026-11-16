@@ -98,6 +98,7 @@ export const CockpitToolbar: React.FC<CockpitToolbarProps> = ({
               <button
                 type="button"
                 className="btn-ghost"
+                data-tip="清空搜索"
                 style={{ padding: 0, border: "none", background: "transparent", cursor: "pointer", color: "var(--muted)" }}
                 onClick={() => onSearchChange("")}
               >
@@ -112,7 +113,7 @@ export const CockpitToolbar: React.FC<CockpitToolbarProps> = ({
               type="button"
               className={`cockpit-view-btn${viewMode === "list" ? " active" : ""}`}
               onClick={() => onViewModeChange("list")}
-              title="列表视图"
+              data-tip="列表视图"
             >
               <IconList style={{ width: 15, height: 15 }} />
             </button>
@@ -120,7 +121,7 @@ export const CockpitToolbar: React.FC<CockpitToolbarProps> = ({
               type="button"
               className={`cockpit-view-btn${viewMode === "grid" ? " active" : ""}`}
               onClick={() => onViewModeChange("grid")}
-              title="网格视图"
+              data-tip="网格视图"
             >
               <IconGrid style={{ width: 15, height: 15 }} />
             </button>
@@ -177,7 +178,7 @@ export const CockpitToolbar: React.FC<CockpitToolbarProps> = ({
             className="cockpit-icon-btn"
             style={{ width: 32, height: 32 }}
             onClick={onToggleSortOrder}
-            title={sortOrder === "desc" ? "当前：降序，点击切换升序" : "当前：升序，点击切换降序"}
+            data-tip={sortOrder === "desc" ? "当前：降序，点击切换升序" : "当前：升序，点击切换降序"}
           >
             {sortOrder === "desc" ? (
               <IconArrowDown style={{ width: 14, height: 14 }} />
@@ -194,7 +195,7 @@ export const CockpitToolbar: React.FC<CockpitToolbarProps> = ({
             type="button"
             className="cockpit-round-btn cockpit-round-btn--primary"
             onClick={onAddAccount}
-            title="添加新账号"
+            data-tip="添加新账号"
           >
             <IconPlus style={{ width: 15, height: 15 }} />
           </button>
@@ -205,7 +206,7 @@ export const CockpitToolbar: React.FC<CockpitToolbarProps> = ({
             className="cockpit-round-btn"
             onClick={onRefreshAll}
             disabled={refreshingAll}
-            title="刷新全部账号配额"
+            data-tip="刷新全部账号配额"
           >
             <IconRefresh
               style={{ width: 15, height: 15 }}
@@ -220,7 +221,7 @@ export const CockpitToolbar: React.FC<CockpitToolbarProps> = ({
             onClick={onToggleSensitive}
             disabled={sensitiveBusy}
             aria-pressed={showSensitive}
-            title={showSensitive ? "当前显示完整邮箱，点击隐藏/脱敏" : "当前已脱敏，点击显示完整邮箱"}
+            data-tip={showSensitive ? "当前显示完整邮箱，点击隐藏/脱敏" : "当前已脱敏，点击显示完整邮箱"}
           >
             {showSensitive
               ? <IconEye style={{ width: 15, height: 15 }} />
@@ -232,7 +233,7 @@ export const CockpitToolbar: React.FC<CockpitToolbarProps> = ({
             type="button"
             className="cockpit-round-btn"
             onClick={onExportAll}
-            title="导出全部账号配置"
+            data-tip="导出全部账号配置"
           >
             <IconUpload style={{ width: 15, height: 15 }} />
           </button>
@@ -242,7 +243,7 @@ export const CockpitToolbar: React.FC<CockpitToolbarProps> = ({
             type="button"
             className="cockpit-round-btn"
             onClick={onOpenFolder}
-            title="打开配置与数据目录"
+            data-tip="打开配置与数据目录"
           >
             <IconFolder style={{ width: 15, height: 15 }} />
           </button>
@@ -252,7 +253,7 @@ export const CockpitToolbar: React.FC<CockpitToolbarProps> = ({
             type="button"
             className="cockpit-round-btn"
             onClick={onOpenSettings}
-            title="账号与配额策略设置"
+            data-tip="账号与配额策略设置"
           >
             <IconSettings style={{ width: 15, height: 15 }} />
           </button>

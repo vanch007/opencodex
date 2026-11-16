@@ -1,5 +1,5 @@
 import React from "react";
-import { accountHasArgonTier, type UnifiedAccountItem } from "../../types/account";
+import { accountHasArgonTier, accountIsUnusable, type UnifiedAccountItem } from "../../types/account";
 import { formatCockpitDate } from "./CockpitAccountCard";
 import {
   IconActivity,
@@ -8,6 +8,7 @@ import {
   IconPause,
   IconPencil,
   IconPlay,
+  IconPower,
   IconRefresh,
   IconTrash,
 } from "../../icons";
@@ -61,7 +62,7 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
 }) => {
   const isAllSelected = accounts.length > 0 && selectedIds.size === accounts.length;
   const unusableCount = accounts.filter(
-    a => !a.paused && ((a.healthTest && !a.healthTest.ok) || a.health?.status === "reauth_required"),
+    a => !a.paused && accountIsUnusable(a),
   ).length;
 
   return (
@@ -91,7 +92,7 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                 }}
                 disabled={isBatchPausing}
                 onClick={onPauseAllUnusable}
-                title="批量停用所有探测失败 (403/504等) 的账号，防止请求分发至故障账号"
+                data-tip="批量停用所有探测失败 (403/504等) 的账号，防止请求分发至故障账号"
               >
                 <IconPause style={{ width: 14, height: 14 }} />
                 <span>{isBatchPausing ? "正在批量停用..." : `一键停用异常账号 (${unusableCount})`}</span>
@@ -103,7 +104,7 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
               style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "#38bdf8", border: "1px solid rgba(56, 189, 248, 0.3)", borderRadius: 6, padding: "3px 10px", background: "rgba(56, 189, 248, 0.08)" }}
               disabled={isTestingAll}
               onClick={onTestAllHealth}
-              title="并发向上游发起真实模型 Prompt 探测，测试所有账号可用性"
+              data-tip="并发向上游发起真实模型 Prompt 探测，测试所有账号可用性"
             >
               <IconActivity style={{ width: 14, height: 14 }} className={isTestingAll ? "spin" : ""} />
               <span>{isTestingAll ? "正在批量测试健康..." : "一键真实模型检测 (全部账号)"}</span>
@@ -179,7 +180,7 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                       ? "cockpit-badge-plan cockpit-badge-plan--free"
                       : "cockpit-badge-plan cockpit-badge-plan--free";
 
-            const isUnusable = (acc.healthTest && !acc.healthTest.ok) || acc.health?.status === "reauth_required";
+            const isUnusable = accountIsUnusable(acc);
 
             return (
               <tr
@@ -255,6 +256,13 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                         </span>
                       </span>
                     )
+                  ) : acc.paused ? (
+                    <span
+                      className="badge badge-muted"
+                      title="账号当前已停用，点击一键检测或右侧心跳图标可重新探测是否恢复"
+                    >
+                      已停用
+                    </span>
                   ) : (
                     <span
                       className={`badge ${
@@ -295,7 +303,7 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                       }}
                       title={`探测异常 (${acc.healthTest.status}): ${acc.healthTest.message}，点击操作栏暂停或一键停用`}
                     >
-                      {acc.healthTest.status === 403 ? "⚠️ 权限失效" : acc.healthTest.status === 504 ? "⚠️ 超时异常" : "⚠️ 状态异常"}
+                      {acc.healthTest.status === 403 ? "⚠️ 权限失效" : acc.healthTest.status === 429 ? "额度耗尽" : acc.healthTest.status === 504 ? "⚠️ 超时异常" : "⚠️ 状态异常"}
                     </span>
                   ) : acc.health?.status === "reauth_required" ? (
                     <span
@@ -397,7 +405,7 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                     <button
                       type="button"
                       className="cockpit-icon-btn"
-                      title="真实模型调用健康检测 (向上游发起极简 Prompt 探测真实可用性与连通性)"
+                      data-tip="真实模型调用健康检测 (向上游发起极简 Prompt 探测真实可用性与连通性)"
                       disabled={isTestingHealth}
                       onClick={() => onTestHealth?.(acc)}
                     >
@@ -415,14 +423,14 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                       <button
                         type="button"
                         className={`cockpit-icon-btn ${acc.paused ? "cockpit-icon-btn--primary" : ""}`}
-                        title={acc.paused ? "恢复启用此账号 (重新加入调度池)" : "停用此账号 (隔离故障，不参与调度与路由)"}
+                        data-tip={acc.paused ? "恢复启用此账号 (重新加入调度池)" : "停用此账号 (隔离故障，不参与调度与路由)"}
                         disabled={pausingId === acc.id}
                         onClick={() => onTogglePause(acc, !acc.paused)}
                       >
                         {pausingId === acc.id ? (
                           <IconRefresh style={{ width: 14, height: 14, animation: "spin 1s linear infinite" }} />
                         ) : acc.paused ? (
-                          <IconPlay style={{ width: 14, height: 14, color: "#34d399" }} />
+                          <IconPower style={{ width: 14, height: 14, color: "#34d399" }} />
                         ) : (
                           <IconPause
                             style={{
@@ -437,7 +445,7 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                     <button
                       type="button"
                       className={`cockpit-icon-btn ${acc.active ? "cockpit-icon-btn--active" : "cockpit-icon-btn--primary"}`}
-                      title={
+                      data-tip={
                         acc.active
                           ? acc.provider === "google-antigravity"
                             ? "当前正在使用的账号 (已同步至 Antigravity IDE)"
@@ -464,7 +472,7 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                     <button
                       type="button"
                       className="cockpit-icon-btn"
-                      title="刷新配额"
+                      data-tip="刷新配额"
                       disabled={isRefreshing}
                       onClick={() => onRefresh(acc)}
                     >
@@ -476,7 +484,7 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                     <button
                       type="button"
                       className="cockpit-icon-btn"
-                      title="修改别名备注"
+                      data-tip="修改别名备注"
                       onClick={() => onEditAlias(acc)}
                     >
                       <IconPencil style={{ width: 14, height: 14 }} />
@@ -484,7 +492,7 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                     <button
                       type="button"
                       className="cockpit-icon-btn"
-                      title={isCopied ? "已复制" : "复制邮箱"}
+                      data-tip={isCopied ? "已复制" : "复制邮箱"}
                       onClick={() => onCopy(acc.email || acc.id, acc.id)}
                     >
                       {isCopied ? (
@@ -496,7 +504,7 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                     <button
                       type="button"
                       className="cockpit-icon-btn cockpit-icon-btn--danger"
-                      title="移除账号"
+                      data-tip="移除账号"
                       onClick={() => onRemove(acc)}
                     >
                       <IconTrash style={{ width: 14, height: 14 }} />

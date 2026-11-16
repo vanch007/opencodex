@@ -42,7 +42,7 @@ export const CockpitHeader: React.FC<CockpitHeaderProps> = ({
         {/* Version & Status Tag */}
         <div className="cockpit-version-tag">
           <span className="cockpit-status-dot" />
-          <span>OpenCodex v2.95.0</span>
+          <span>OpenCodex v2.100.0</span>
         </div>
       </div>
 
@@ -53,6 +53,7 @@ export const CockpitHeader: React.FC<CockpitHeaderProps> = ({
           <button
             type="button"
             className={`cockpit-provider-tab${selectedProvider === "all" ? " active" : ""}`}
+            data-tip="查看所有渠道账号"
             onClick={() => onSelectProvider("all")}
           >
             <span style={{ fontSize: 13 }}>🚀</span>
@@ -62,6 +63,7 @@ export const CockpitHeader: React.FC<CockpitHeaderProps> = ({
           <button
             type="button"
             className={`cockpit-provider-tab${selectedProvider === "google-antigravity" ? " active" : ""}`}
+            data-tip="筛选 Google Antigravity 账号池"
             onClick={() => onSelectProvider("google-antigravity")}
           >
             <span style={{ fontSize: 13 }}>🌐</span>
@@ -71,6 +73,7 @@ export const CockpitHeader: React.FC<CockpitHeaderProps> = ({
           <button
             type="button"
             className={`cockpit-provider-tab${selectedProvider === "openai" ? " active" : ""}`}
+            data-tip="筛选 OpenAI / Codex 账号池"
             onClick={() => onSelectProvider("openai")}
           >
             <span style={{ fontSize: 13 }}>⚡</span>
@@ -80,6 +83,7 @@ export const CockpitHeader: React.FC<CockpitHeaderProps> = ({
           <button
             type="button"
             className={`cockpit-provider-tab${selectedProvider === "xai" ? " active" : ""}`}
+            data-tip="筛选 xAI Grok 账号池"
             onClick={() => onSelectProvider("xai")}
           >
             <span style={{ fontSize: 13 }}>🤖</span>
@@ -93,6 +97,7 @@ export const CockpitHeader: React.FC<CockpitHeaderProps> = ({
           <button
             type="button"
             className={`cockpit-nav-pill${activeTab === "overview" ? " active" : ""}`}
+            data-tip="账号配额卡片与列表总览"
             onClick={() => onSelectTab("overview")}
           >
             <span style={{ fontSize: 13 }}>🚀</span>
@@ -101,6 +106,7 @@ export const CockpitHeader: React.FC<CockpitHeaderProps> = ({
           <button
             type="button"
             className={`cockpit-nav-pill${activeTab === "instances" ? " active" : ""}`}
+            data-tip="查看本地代理实例信息"
             onClick={() => onSelectTab("instances")}
           >
             <span style={{ fontSize: 13 }}>🗂</span>
@@ -109,6 +115,7 @@ export const CockpitHeader: React.FC<CockpitHeaderProps> = ({
           <button
             type="button"
             className={`cockpit-nav-pill${activeTab === "tasks" ? " active" : ""}`}
+            data-tip="查看自动配额刷新与唤醒计划"
             onClick={() => onSelectTab("tasks")}
           >
             <span style={{ fontSize: 13 }}>⏰</span>
@@ -117,6 +124,7 @@ export const CockpitHeader: React.FC<CockpitHeaderProps> = ({
           <button
             type="button"
             className={`cockpit-nav-pill${activeTab === "health" ? " active" : ""}`}
+            data-tip="表格视图：批量真实模型探测与账号启停管理"
             onClick={() => onSelectTab("health")}
           >
             <span style={{ fontSize: 13 }}>🛡</span>

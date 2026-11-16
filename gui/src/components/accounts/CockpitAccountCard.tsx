@@ -8,6 +8,7 @@ import {
   IconInfo,
   IconPause,
   IconPlay,
+  IconPower,
   IconRefresh,
   IconTag,
   IconTerminal,
@@ -223,7 +224,7 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
                 type="button"
                 className="cockpit-mini-btn"
                 onClick={() => onEditAlias(acc)}
-                title="修改备注别名"
+                data-tip="修改备注别名"
               >
                 加备注
               </button>
@@ -231,7 +232,7 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
                 type="button"
                 className="cockpit-mini-btn"
                 onClick={() => onRefresh(acc)}
-                title="刷新配额"
+                data-tip="刷新配额"
               >
                 ↻ 刷新
               </button>
@@ -311,7 +312,7 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
                 type="button"
                 className="cockpit-mini-btn"
                 onClick={() => onEditAlias(acc)}
-                title="修改备注别名"
+                data-tip="修改备注别名"
               >
                 加备注
               </button>
@@ -319,7 +320,7 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
                 type="button"
                 className="cockpit-mini-btn"
                 onClick={() => onRefresh(acc)}
-                title="重置配额状态"
+                data-tip="重置配额状态"
               >
                 ↻ 重置 {acc.resetCount ?? 0}
               </button>
@@ -411,7 +412,7 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
             <button
               type="button"
               className="cockpit-icon-btn"
-              title="控制台终端"
+              data-tip="控制台终端"
               onClick={() => onShowInfo(acc)}
             >
               <IconTerminal style={{ width: 14, height: 14 }} />
@@ -421,7 +422,7 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
             <button
               type="button"
               className="cockpit-icon-btn"
-              title="账号详情"
+              data-tip="账号详情"
               onClick={() => onShowInfo(acc)}
             >
               <IconInfo style={{ width: 14, height: 14 }} />
@@ -430,7 +431,7 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
           <button
             type="button"
             className="cockpit-icon-btn"
-            title="加备注 / 标签"
+            data-tip="加备注 / 标签"
             onClick={() => onEditAlias(acc)}
           >
             <IconTag style={{ width: 14, height: 14 }} />
@@ -439,7 +440,7 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
             <button
               type="button"
               className="cockpit-icon-btn"
-              title="真实模型调用健康检测 (向上游发起极简 Prompt 探测真实可用性与连通性)"
+              data-tip="真实模型调用健康检测 (向上游发起极简 Prompt 探测真实可用性与连通性)"
               disabled={isTestingHealth}
               onClick={() => onTestHealth(acc)}
             >
@@ -457,14 +458,14 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
             <button
               type="button"
               className={`cockpit-icon-btn ${acc.paused ? "cockpit-icon-btn--primary" : ""}`}
-              title={acc.paused ? "恢复启用此账号 (重新加入调度池)" : "停用此账号 (隔离故障，不参与调度与路由)"}
+              data-tip={acc.paused ? "恢复启用此账号 (重新加入调度池)" : "停用此账号 (隔离故障，不参与调度与路由)"}
               disabled={pausingId === acc.id}
               onClick={() => onTogglePause(acc, !acc.paused)}
             >
               {pausingId === acc.id ? (
                 <IconRefresh style={{ width: 14, height: 14, animation: "spin 1s linear infinite" }} />
               ) : acc.paused ? (
-                <IconPlay style={{ width: 14, height: 14, color: "#34d399" }} />
+                <IconPower style={{ width: 14, height: 14, color: "#34d399" }} />
               ) : (
                 <IconPause
                   style={{
@@ -479,7 +480,7 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
           <button
             type="button"
             className="cockpit-icon-btn"
-            title={isCopied ? "已复制" : "复制账号邮箱"}
+            data-tip={isCopied ? "已复制" : "复制账号邮箱"}
             onClick={() => onCopy(acc.email || acc.id, acc.id)}
           >
             {isCopied ? (
@@ -491,7 +492,7 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
           <button
             type="button"
             className={`cockpit-icon-btn ${acc.active ? "cockpit-icon-btn--active" : "cockpit-icon-btn--primary"}`}
-            title={
+            data-tip={
               acc.active
                 ? isAntigravity
                   ? "当前正在使用的账号 (已同步至 Antigravity IDE)"
@@ -518,7 +519,7 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
           <button
             type="button"
             className="cockpit-icon-btn"
-            title="刷新配额"
+            data-tip="刷新配额"
             disabled={isRefreshing}
             onClick={() => onRefresh(acc)}
           >
@@ -530,7 +531,7 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
           <button
             type="button"
             className="cockpit-icon-btn"
-            title="导出账号配置"
+            data-tip="导出账号配置"
             onClick={() => onExport(acc)}
           >
             <IconUpload style={{ width: 14, height: 14 }} />
@@ -538,7 +539,7 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
           <button
             type="button"
             className="cockpit-icon-btn cockpit-icon-btn--danger"
-            title="移除账号"
+            data-tip="移除账号"
             onClick={() => onRemove(acc)}
           >
             <IconTrash style={{ width: 14, height: 14 }} />
