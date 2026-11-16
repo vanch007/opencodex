@@ -16,6 +16,13 @@ describe("Antigravity refusal classification", () => {
     expect(classified(403,
       "Provider error 403: Antigravity access denied (PERMISSION_DENIED): Verify your account to continue.",
     ).kind).toBe("verify_account");
+    expect(classified(403, {
+      error: {
+        message: "This service has been disabled in this account for violation of Terms of Service. Please submit an appeal to continue using this product.",
+        status: "PERMISSION_DENIED",
+        code: 403,
+      },
+    }).kind).toBe("verify_account");
   });
 
   test("other statuses never convict, even with verification wording", () => {

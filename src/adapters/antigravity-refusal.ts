@@ -35,6 +35,10 @@ export interface AntigravityRefusal { kind: AntigravityRefusalKind }
 
 const VERIFY_ACCOUNT_WORDS = [
   "verify your account",
+  "terms of service",
+  "tos_violation",
+  "service has been disabled",
+  "account has been disabled",
 ] as const;
 
 /**

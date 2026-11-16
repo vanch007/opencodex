@@ -15,6 +15,7 @@ export interface AccountHealthTestResult {
   errorCode?: string;
   message: string;
   accountEmail?: string;
+  paused?: boolean;
 }
 
 export async function handleOAuthAccountHealthTest(
@@ -112,13 +113,23 @@ export async function handleOAuthAccountHealthTest(
 
       let errorCode = "upstream_error";
       let message = `上游返回 HTTP ${res.status}`;
+      let autoPaused = false;
 
       if (res.status === 404) {
         errorCode = "not_found";
         message = `该账号不支持模型 ${testModel} (404 Not Found)`;
       } else if (res.status === 403 || res.status === 401) {
         errorCode = "permission_denied";
-        message = `账号权限被拒绝 (${res.status})，建议重新授权`;
+        const errText = (await res.text().catch(() => "")).toLowerCase();
+        const isTos = errText.includes("terms of service") || errText.includes("tos_violation") || errText.includes("disabled");
+        message = isTos ? "账号已被 Google 封禁/停用 (TOS 违规 403)" : `账号权限被拒绝 (${res.status})，已失效`;
+        try {
+          const { setAccountPaused } = await import("../../oauth/store");
+          await setAccountPaused(provider, accountId, true);
+          autoPaused = true;
+        } catch {
+          // ignore pause failure
+        }
       } else if (res.status === 429) {
         errorCode = "rate_limit_exceeded";
         message = `上游模型配额已耗尽 (429 Rate Limit)`;
@@ -135,6 +146,7 @@ export async function handleOAuthAccountHealthTest(
         errorCode,
         message,
         accountEmail: email,
+        ...(autoPaused ? { paused: true } : {}),
       } satisfies AccountHealthTestResult, 200);
     } catch (error) {
       const durationMs = Date.now() - startTime;
