@@ -2,24 +2,22 @@ import React from "react";
 import { IconUser } from "../../icons";
 
 interface CockpitHeaderProps {
-  totalCount: number;
+  emailCount: number;
   antigravityCount: number;
-  openaiCount: number;
+  aiStudioCount: number;
+  chatgptCount: number;
   grokCount: number;
-  selectedProvider: string;
   activeTab: "overview" | "instances" | "tasks" | "health";
-  onSelectProvider: (provider: string) => void;
   onSelectTab: (tab: "overview" | "instances" | "tasks" | "health") => void;
 }
 
 export const CockpitHeader: React.FC<CockpitHeaderProps> = ({
-  totalCount,
+  emailCount,
   antigravityCount,
-  openaiCount,
+  aiStudioCount,
+  chatgptCount,
   grokCount,
-  selectedProvider,
   activeTab,
-  onSelectProvider,
   onSelectTab,
 }) => {
   return (
@@ -29,75 +27,54 @@ export const CockpitHeader: React.FC<CockpitHeaderProps> = ({
         <div className="cockpit-title-group">
           <h1 className="cockpit-page-title">
             <IconUser style={{ width: 22, height: 22 }} />
-            账号
+            邮箱账号总览
           </h1>
           <span
             className="cockpit-info-badge"
-            title="Cockpit 风格集中管理 Google Antigravity、OpenAI、xAI Grok 与各提供商账号配额"
+            title="按邮箱合并展示 Google Antigravity、AI Studio（本地统计）、ChatGPT 与 xAI Grok 四大渠道额度，未开通渠道可直接在对应邮箱上添加"
           >
             ?
           </span>
         </div>
 
-        {/* Version & Status Tag */}
         <div className="cockpit-version-tag">
           <span className="cockpit-status-dot" />
           <span>OpenCodex v2.100.0</span>
         </div>
       </div>
 
-      {/* ── Second Row: Provider Selection Tabs & Centered Navigation Pills ── */}
+      {/* ── Second Row: Single Unified Email Tab & Coverage Badges + Navigation Pills ── */}
       <div className="cockpit-nav-row">
-        {/* Provider Tabs (Replaces Dropdown Menu) */}
         <div className="cockpit-provider-tabs">
-          <button
-            type="button"
-            className={`cockpit-provider-tab${selectedProvider === "all" ? " active" : ""}`}
-            data-tip="查看所有渠道账号"
-            onClick={() => onSelectProvider("all")}
+          <div
+            className="cockpit-provider-tab active"
+            data-tip="按邮箱聚合管理 Antigravity、AI Studio、ChatGPT 与 Grok 额度"
+            style={{ cursor: "default" }}
           >
-            <span style={{ fontSize: 13 }}>🚀</span>
-            <span>全部提供方</span>
-            <span className="cockpit-provider-tab-badge">{totalCount}</span>
-          </button>
-          <button
-            type="button"
-            className={`cockpit-provider-tab${selectedProvider === "google-antigravity" ? " active" : ""}`}
-            data-tip="筛选 Google Antigravity 账号池"
-            onClick={() => onSelectProvider("google-antigravity")}
-          >
-            <span style={{ fontSize: 13 }}>🌐</span>
-            <span>Google Antigravity</span>
-            <span className="cockpit-provider-tab-badge">{antigravityCount}</span>
-          </button>
-          <button
-            type="button"
-            className={`cockpit-provider-tab${selectedProvider === "openai" ? " active" : ""}`}
-            data-tip="筛选 OpenAI / Codex 账号池"
-            onClick={() => onSelectProvider("openai")}
-          >
-            <span style={{ fontSize: 13 }}>⚡</span>
-            <span>OpenAI / Codex</span>
-            <span className="cockpit-provider-tab-badge">{openaiCount}</span>
-          </button>
-          <button
-            type="button"
-            className={`cockpit-provider-tab${selectedProvider === "xai" ? " active" : ""}`}
-            data-tip="筛选 xAI Grok 账号池"
-            onClick={() => onSelectProvider("xai")}
-          >
-            <span style={{ fontSize: 13 }}>🤖</span>
-            <span>xAI Grok</span>
-            <span className="cockpit-provider-tab-badge">{grokCount}</span>
-          </button>
+            <span style={{ fontSize: 13 }}>📧</span>
+            <span>全部邮箱账号</span>
+            <span className="cockpit-provider-tab-badge">{emailCount}</span>
+          </div>
+          <span className="cockpit-channel-stat-chip" data-tip="已登录 Google Antigravity 的邮箱数">
+            🌐 Antigravity <strong>{antigravityCount}</strong>
+          </span>
+          <span className="cockpit-channel-stat-chip" data-tip="已关联 Google AI Studio API Key 的邮箱数">
+            🔑 AI Studio <strong>{aiStudioCount}</strong>
+          </span>
+          <span className="cockpit-channel-stat-chip" data-tip="已接入 ChatGPT / Codex 的邮箱数">
+            ⚡ ChatGPT <strong>{chatgptCount}</strong>
+          </span>
+          <span className="cockpit-channel-stat-chip" data-tip="已授权 xAI Grok 的邮箱数">
+            🤖 Grok <strong>{grokCount}</strong>
+          </span>
         </div>
 
-        {/* Centered Navigation Tabs */}
+        {/* Navigation Pills */}
         <div className="cockpit-nav-pills">
           <button
             type="button"
             className={`cockpit-nav-pill${activeTab === "overview" ? " active" : ""}`}
-            data-tip="账号配额卡片与列表总览"
+            data-tip="按邮箱聚合的配额卡片与列表总览"
             onClick={() => onSelectTab("overview")}
           >
             <span style={{ fontSize: 13 }}>🚀</span>
@@ -124,7 +101,7 @@ export const CockpitHeader: React.FC<CockpitHeaderProps> = ({
           <button
             type="button"
             className={`cockpit-nav-pill${activeTab === "health" ? " active" : ""}`}
-            data-tip="表格视图：批量真实模型探测与账号启停管理"
+            data-tip="表格视图：四渠道额度同屏对比与真实模型健康检测"
             onClick={() => onSelectTab("health")}
           >
             <span style={{ fontSize: 13 }}>🛡</span>

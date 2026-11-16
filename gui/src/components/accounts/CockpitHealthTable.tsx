@@ -1,6 +1,7 @@
 import React from "react";
-import { accountHasArgonTier, accountIsUnusable, type UnifiedAccountItem } from "../../types/account";
+import { type EmailAccountGroup, type UnifiedAccountItem } from "../../types/account";
 import { formatCockpitDate } from "./CockpitAccountCard";
+import { formatCompactTokens, quotaToneClasses } from "./email-account-groups";
 import {
   IconActivity,
   IconCheck,
@@ -14,35 +15,55 @@ import {
 } from "../../icons";
 
 interface CockpitHealthTableProps {
-  accounts: UnifiedAccountItem[];
+  groups: EmailAccountGroup[];
   selectedIds: Set<string>;
   switchingId: string | null;
   refreshingId: string | null;
-  copiedId: string | null;
+  isCopiedKey?: (emailKey: string) => boolean;
   testingHealthIds?: Set<string>;
   isTestingAll?: boolean;
   pausingId?: string | null;
   isBatchPausing?: boolean;
   formatEmail: (email: string) => string;
   onToggleSelectAll: () => void;
-  onToggleSelectOne: (id: string) => void;
+  onToggleSelectOne: (emailKey: string) => void;
   onSwitch: (item: UnifiedAccountItem) => void;
   onRefresh: (item: UnifiedAccountItem) => void;
+  onRefreshGroup: (group: EmailAccountGroup) => void;
   onTogglePause?: (item: UnifiedAccountItem, paused: boolean) => void;
   onPauseAllUnusable?: () => void;
   onTestHealth?: (item: UnifiedAccountItem) => void;
   onTestAllHealth?: () => void;
   onEditAlias: (item: UnifiedAccountItem) => void;
+  onEditAiStudioKey: (group: EmailAccountGroup) => void;
+  onAddPlatform: (email: string, provider: "google-antigravity" | "openai" | "xai") => void;
   onCopy: (text: string, id: string) => void;
-  onRemove: (item: UnifiedAccountItem) => void;
+  onRemoveGroup: (group: EmailAccountGroup) => void;
+}
+
+function getPlanBadgeClass(plan?: string | null): string {
+  const p = (plan ?? "").toLowerCase();
+  if (p.includes("ultra")) return "cockpit-badge-plan cockpit-badge-plan--ultra";
+  if (p.includes("pro") || p === "g1-pro-tier") return "cockpit-badge-plan";
+  if (p.includes("plus")) return "cockpit-badge-plan cockpit-badge-plan--plus";
+  return "cockpit-badge-plan cockpit-badge-plan--free";
+}
+
+function getPlanText(plan?: string | null): string {
+  const p = (plan ?? "").toLowerCase();
+  if (p.includes("ultra")) return "ULTRA";
+  if (p.includes("pro") || p === "g1-pro-tier") return "PRO";
+  if (p.includes("plus")) return "PLUS";
+  if (p.includes("free")) return "FREE";
+  return (plan || "FREE").toUpperCase();
 }
 
 export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
-  accounts,
+  groups,
   selectedIds,
   switchingId,
   refreshingId,
-  copiedId,
+  isCopiedKey,
   testingHealthIds = new Set(),
   isTestingAll = false,
   pausingId = null,
@@ -52,25 +73,37 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
   onToggleSelectOne,
   onSwitch,
   onRefresh,
+  onRefreshGroup,
   onTogglePause,
   onPauseAllUnusable,
   onTestHealth,
   onTestAllHealth,
   onEditAlias,
+  onEditAiStudioKey,
+  onAddPlatform,
   onCopy,
-  onRemove,
+  onRemoveGroup,
 }) => {
-  const isAllSelected = accounts.length > 0 && selectedIds.size === accounts.length;
-  const unusableCount = accounts.filter(
-    a => !a.paused && accountIsUnusable(a),
-  ).length;
+  const isAllSelected = groups.length > 0 && selectedIds.size === groups.length;
+  const unusableCount = groups.filter(g => g.anyUnusable).length;
 
   return (
     <div className="cockpit-table-wrap">
       {onTestAllHealth && (
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", borderBottom: "1px solid var(--border, rgba(255,255,255,0.08))", background: "rgba(255,255,255,0.02)" }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            padding: "10px 14px",
+            borderBottom: "1px solid var(--border, rgba(255,255,255,0.08))",
+            background: "rgba(255,255,255,0.02)",
+            flexWrap: "wrap",
+            gap: 8,
+          }}
+        >
           <div style={{ fontSize: 12, color: "var(--muted)" }}>
-            已就绪 <strong>{accounts.length}</strong> 个账号 · 支持区别显示高阶与基础配额，使用真实模型探测健康
+            共 <strong>{groups.length}</strong> 个邮箱账号 · 同屏合并显示 Antigravity / AI Studio（本地统计）/ ChatGPT / Grok 四大额度
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             {onPauseAllUnusable && unusableCount > 0 && (
@@ -101,21 +134,32 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
             <button
               type="button"
               className="btn btn-sm btn-ghost"
-              style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "#38bdf8", border: "1px solid rgba(56, 189, 248, 0.3)", borderRadius: 6, padding: "3px 10px", background: "rgba(56, 189, 248, 0.08)" }}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 12,
+                color: "#38bdf8",
+                border: "1px solid rgba(56, 189, 248, 0.3)",
+                borderRadius: 6,
+                padding: "3px 10px",
+                background: "rgba(56, 189, 248, 0.08)",
+              }}
               disabled={isTestingAll}
               onClick={onTestAllHealth}
               data-tip="并发向上游发起真实模型 Prompt 探测，测试所有账号可用性"
             >
               <IconActivity style={{ width: 14, height: 14 }} className={isTestingAll ? "spin" : ""} />
-              <span>{isTestingAll ? "正在批量测试健康..." : "一键真实模型检测 (全部账号)"}</span>
+              <span>{isTestingAll ? "正在批量测试健康..." : "一键真实模型检测 (全部邮箱)"}</span>
             </button>
           </div>
         </div>
       )}
+
       <table className="cockpit-table">
         <thead>
           <tr>
-            <th style={{ width: 40 }}>
+            <th style={{ width: 38 }}>
               <input
                 type="checkbox"
                 className="cockpit-checkbox"
@@ -123,377 +167,425 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                 onChange={onToggleSelectAll}
               />
             </th>
-            <th>账号邮箱 / 别名</th>
-            <th>提供商</th>
-            <th>当前计划</th>
-            <th>健康检测状态</th>
-            <th>活跃状态</th>
-            <th>配额概况</th>
+            <th>账号邮箱 / 状态</th>
+            <th>🌐 Antigravity 额度</th>
+            <th>🔑 AI Studio 额度 (本地统计)</th>
+            <th>⚡ ChatGPT 额度</th>
+            <th>🤖 Grok 额度</th>
             <th>更新时间</th>
             <th style={{ textAlign: "right" }}>操作</th>
           </tr>
         </thead>
         <tbody>
-          {accounts.map(acc => {
-            const isCopied = copiedId === acc.id;
-            const isSwitching = switchingId === acc.id;
-            const isRefreshing = refreshingId === acc.id;
-            const isTestingHealth = testingHealthIds.has(acc.id);
+          {groups.map(group => {
+            const ag = group.antigravity;
+            const ai = group.aiStudio;
+            const cg = group.chatgpt;
+            const gk = group.grok;
+            const primaryOAuth = ag ?? gk ?? cg;
+            const isCopied = Boolean(isCopiedKey?.(group.emailKey));
+            const isTestingHealth = Boolean(
+              (ag && testingHealthIds.has(ag.id)) || (gk && testingHealthIds.has(gk.id)),
+            );
+            const isRefreshingGroup = Boolean(
+              (ag && refreshingId === ag.id) || (cg && refreshingId === cg.id) || (gk && refreshingId === gk.id),
+            );
 
-            // Antigravity quota breakdown
-            const windows = acc.quota?.customWindows ?? [];
-            const findWin = (prefix: string, isWeekly: boolean) => {
-              return windows.find(w => {
+            // Antigravity derived windows
+            const agWindows = ag?.quota?.customWindows ?? [];
+            const findAgWin = (prefix: string, isWeekly: boolean) =>
+              agWindows.find(w => {
                 const l = w.label.toLowerCase();
-                const matches = l.startsWith(prefix.toLowerCase()) || l.includes(prefix.toLowerCase());
-                const weekly = l.includes("week");
-                return matches && (isWeekly ? weekly : !weekly);
+                return (l.startsWith(prefix) || l.includes(prefix)) && (isWeekly ? l.includes("week") : !l.includes("week"));
               });
-            };
-            const hasArgon = accountHasArgonTier(acc);
-
-            const getRemaining = (w?: (typeof windows)[0]) => {
-              if (!w) return 100;
-              const used = typeof w.percent === "number" && Number.isFinite(w.percent) ? w.percent : 0;
-              return Math.max(0, Math.min(100, Math.round(100 - used)));
-            };
-
-            const claWeeklyRem = getRemaining(findWin("cla", true));
-            const gemWeeklyRem = getRemaining(findWin("gem", true));
-            const argonWeeklyRem = hasArgon ? getRemaining(findWin("argon", true)) : null;
-
-            const pLower = (acc.plan ?? "").toLowerCase();
-            const isFree = pLower.includes("free");
-            const isUltra = pLower.includes("ultra");
-            const isPro = pLower.includes("pro") || pLower === "g1-pro-tier";
-            const isPlus = pLower.includes("plus");
-            const isGrok = acc.provider === "xai";
-            const planClass = isGrok
-              ? "cockpit-badge-plan cockpit-badge-plan--grok"
-              : isUltra
-                ? "cockpit-badge-plan cockpit-badge-plan--ultra"
-                : isPro
-                  ? "cockpit-badge-plan"
-                  : isPlus
-                    ? "cockpit-badge-plan cockpit-badge-plan--plus"
-                    : isFree
-                      ? "cockpit-badge-plan cockpit-badge-plan--free"
-                      : "cockpit-badge-plan cockpit-badge-plan--free";
-
-            const isUnusable = accountIsUnusable(acc);
+            const agRem = (w?: (typeof agWindows)[0]) =>
+              w ? Math.max(0, Math.min(100, Math.round(100 - (typeof w.percent === "number" ? w.percent : 0)))) : 100;
+            const claRem = findAgWin("cla", true) ? agRem(findAgWin("cla", true)) : null;
+            const gemRem = findAgWin("gem", true) ? agRem(findAgWin("gem", true)) : null;
+            const argonRem = group.hasArgon && findAgWin("argon", true) ? agRem(findAgWin("argon", true)) : null;
+            const agMinRem = [claRem, gemRem, argonRem].filter((v): v is number => v !== null);
+            const agBarPct = agMinRem.length > 0 ? Math.min(...agMinRem) : 100;
+            const agTones = quotaToneClasses(agBarPct);
 
             return (
               <tr
-                key={`${acc.provider}:${acc.id}`}
+                key={group.emailKey}
                 style={{
-                  opacity: acc.paused ? 0.6 : 1,
-                  background: acc.paused ? "rgba(0,0,0,0.1)" : isUnusable ? "rgba(239, 68, 68, 0.04)" : undefined,
-                  transition: "opacity 0.2s ease, background 0.2s ease",
+                  opacity: group.allPaused ? 0.62 : 1,
+                  background: group.allPaused
+                    ? "rgba(0,0,0,0.08)"
+                    : group.anyUnusable
+                      ? "rgba(239, 68, 68, 0.04)"
+                      : undefined,
                 }}
               >
                 <td>
                   <input
                     type="checkbox"
                     className="cockpit-checkbox"
-                    checked={selectedIds.has(acc.id)}
-                    onChange={() => onToggleSelectOne(acc.id)}
+                    checked={selectedIds.has(group.emailKey)}
+                    onChange={() => onToggleSelectOne(group.emailKey)}
                   />
                 </td>
-                <td>
-                  <div style={{ fontWeight: 700 }}>{formatEmail(acc.email)}</div>
-                  {acc.alias && (
-                    <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{acc.alias}</div>
+
+                {/* Email & Overall Health / Status */}
+                <td style={{ minWidth: 195 }}>
+                  <div style={{ fontWeight: 700, wordBreak: "break-all" }}>{formatEmail(group.email)}</div>
+                  {group.alias && (
+                    <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{group.alias}</div>
                   )}
-                </td>
-                <td>
-                  <span className="badge badge-muted">{acc.providerLabel}</span>
-                </td>
-                <td>
-                  <span className={planClass}>{acc.plan?.toUpperCase()}</span>
-                </td>
-                <td>
-                  {/* Real model health check status */}
-                  {isTestingHealth ? (
-                    <span className="badge badge-amber" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                      <IconRefresh style={{ width: 11, height: 11, animation: "spin 1s linear infinite" }} />
-                      <span>真实探测中...</span>
-                    </span>
-                  ) : acc.healthTest ? (
-                    acc.healthTest.ok ? (
-                      <span
-                        className="badge badge-green"
-                        style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}
-                        title={`真实模型调用: 200 OK (${acc.healthTest.model})\n响应耗时: ${Math.round(acc.healthTest.durationMs)}ms\n探测时间: ${new Date(acc.healthTest.testedAt).toLocaleTimeString()}`}
-                      >
-                        <span>● 200 OK</span>
-                        <span style={{ opacity: 0.8, fontSize: 10 }}>({Math.round(acc.healthTest.durationMs)}ms)</span>
-                      </span>
-                    ) : (
+                  <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap", marginTop: 5 }}>
+                    {group.anyActive && <span className="cockpit-badge-active" style={{ fontSize: 10, padding: "1px 6px" }}>使用中</span>}
+                    {group.allPaused ? (
                       <span
                         className="badge"
                         style={{
-                          background: acc.healthTest.status === 404 ? "rgba(245, 158, 11, 0.15)" : "rgba(239, 68, 68, 0.15)",
-                          color: acc.healthTest.status === 404 ? "#fbbf24" : "#f87171",
-                          border: `1px solid ${acc.healthTest.status === 404 ? "rgba(245, 158, 11, 0.3)" : "rgba(239, 68, 68, 0.3)"}`,
-                          cursor: "pointer",
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 4,
+                          background: "rgba(239, 68, 68, 0.14)",
+                          color: "#f87171",
+                          border: "1px solid rgba(239, 68, 68, 0.3)",
+                          fontSize: 10,
+                          padding: "1px 6px",
                         }}
-                        title={`探测失败: ${acc.healthTest.message}\nHTTP ${acc.healthTest.status}\n模型: ${acc.healthTest.model}`}
                       >
-                        <span>●</span>
-                        <span>
-                          {acc.healthTest.status === 403 || acc.healthTest.status === 401
-                            ? "403 权限失效"
-                            : acc.healthTest.status === 404
-                            ? "404 不支持"
-                            : acc.healthTest.status === 429
-                            ? "429 额度耗尽"
-                            : acc.healthTest.status === 504
-                            ? "504 超时"
-                            : `${acc.healthTest.status} 异常`}
-                        </span>
+                        ● 已停用
                       </span>
-                    )
-                  ) : acc.paused ? (
-                    <span
-                      className="badge badge-muted"
-                      title="账号当前已停用，点击一键检测或右侧心跳图标可重新探测是否恢复"
-                    >
-                      已停用
-                    </span>
-                  ) : (
-                    <span
-                      className={`badge ${
-                        acc.health?.status === "healthy" ? "badge-green" : "badge-amber"
-                      }`}
-                      title="尚未发起本次会话真实调用探测，点击操作栏心跳图标测试"
-                    >
-                      {acc.health?.status ?? "healthy"}
-                    </span>
-                  )}
+                    ) : group.anyUnusable ? (
+                      <span
+                        className="badge"
+                        style={{
+                          background: "rgba(239, 68, 68, 0.14)",
+                          color: "#f87171",
+                          border: "1px solid rgba(239, 68, 68, 0.3)",
+                          fontSize: 10,
+                          padding: "1px 6px",
+                        }}
+                      >
+                        ⚠️ 状态异常
+                      </span>
+                    ) : !group.anyActive ? (
+                      <span style={{ color: "#10b981", fontSize: 11, fontWeight: 600 }}>● 就绪</span>
+                    ) : null}
+                  </div>
                 </td>
+
+                {/* Column 1: Antigravity */}
                 <td>
-                  {acc.paused ? (
-                    <span
-                      className="badge"
-                      style={{
-                        background: "rgba(239, 68, 68, 0.15)",
-                        color: "#f87171",
-                        border: "1px solid rgba(239, 68, 68, 0.35)",
-                        fontWeight: 600,
-                        fontSize: 11,
-                        padding: "3px 8px",
-                      }}
-                      title="账号已被停用，已从调度池和路由中排除，不会处理任何请求"
-                    >
-                      ● 已停用
-                    </span>
-                  ) : acc.healthTest && !acc.healthTest.ok ? (
-                    <span
-                      className="badge"
-                      style={{
-                        background: acc.healthTest.status === 403 ? "rgba(239, 68, 68, 0.15)" : "rgba(245, 158, 11, 0.15)",
-                        color: acc.healthTest.status === 403 ? "#f87171" : "#fbbf24",
-                        border: `1px solid ${acc.healthTest.status === 403 ? "rgba(239, 68, 68, 0.35)" : "rgba(245, 158, 11, 0.35)"}`,
-                        fontWeight: 600,
-                        fontSize: 11,
-                        padding: "3px 8px",
-                      }}
-                      title={`探测异常 (${acc.healthTest.status}): ${acc.healthTest.message}，点击操作栏暂停或一键停用`}
-                    >
-                      {acc.healthTest.status === 403 ? "⚠️ 权限失效" : acc.healthTest.status === 429 ? "额度耗尽" : acc.healthTest.status === 504 ? "⚠️ 超时异常" : "⚠️ 状态异常"}
-                    </span>
-                  ) : acc.health?.status === "reauth_required" ? (
-                    <span
-                      className="badge"
-                      style={{
-                        background: "rgba(239, 68, 68, 0.15)",
-                        color: "#f87171",
-                        border: "1px solid rgba(239, 68, 68, 0.35)",
-                        fontWeight: 600,
-                        fontSize: 11,
-                        padding: "3px 8px",
-                      }}
-                      title="凭据失效，需要重新登录授权"
-                    >
-                      ● 需重新授权
-                    </span>
-                  ) : acc.active ? (
-                    <span className="cockpit-badge-active">当前使用中</span>
-                  ) : (
-                    <span style={{ color: "#34d399", fontSize: 12, fontWeight: 500 }}>● 备用就绪</span>
-                  )}
-                </td>
-                <td style={{ fontSize: 12, minWidth: 200 }}>
-                  {acc.provider === "google-antigravity" ? (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                        {hasArgon ? (
+                  {ag ? (
+                    <div className="cockpit-table-cell-col" style={{ minWidth: 175 }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                          <span className={getPlanBadgeClass(ag.plan)} style={{ fontSize: 10, padding: "1px 6px" }}>
+                            {getPlanText(ag.plan)}
+                          </span>
                           <span
                             className="badge"
                             style={{
-                              background: "rgba(168, 85, 247, 0.15)",
-                              color: "#c084fc",
-                              border: "1px solid rgba(168, 85, 247, 0.35)",
-                              fontSize: 11,
-                              fontWeight: 600,
-                              padding: "2px 6px",
+                              background: group.hasArgon ? "rgba(168, 85, 247, 0.14)" : "rgba(59, 130, 246, 0.14)",
+                              color: group.hasArgon ? "#a855f7" : "#3b82f6",
+                              border: `1px solid ${group.hasArgon ? "rgba(168, 85, 247, 0.3)" : "rgba(59, 130, 246, 0.3)"}`,
+                              fontSize: 10,
+                              padding: "1px 5px",
                             }}
-                            title="该账号支持 Gemini 4 Argon 及 Claude 5.5 (全模型)"
+                            title={group.hasArgon ? "支持 Gemini 4 Argon + Hydrogen + Claude 5.5" : "支持 Hydrogen + Flash + Claude 4.6"}
                           >
-                            🌟 Argon + Claude 5.5
+                            {group.hasArgon ? "🌟 Argon" : "⚡ Flash"}
                           </span>
-                        ) : (
-                          <span
-                            className="badge"
-                            style={{
-                              background: "rgba(59, 130, 246, 0.15)",
-                              color: "#60a5fa",
-                              border: "1px solid rgba(59, 130, 246, 0.35)",
-                              fontSize: 11,
-                              fontWeight: 600,
-                              padding: "2px 6px",
-                            }}
-                            title="该账号仅支持基础模型: Gemini 3.8 Flash 与 Claude 4.6"
-                          >
-                            ⚡ Flash + Claude 4.6
-                          </span>
-                        )}
-                        {argonWeeklyRem === 0 && (
-                          <span
-                            className="badge"
-                            style={{ background: "rgba(239, 68, 68, 0.15)", color: "#f87171", border: "1px solid rgba(239, 68, 68, 0.3)", fontSize: 10, padding: "1px 5px" }}
-                          >
-                            Argon周额用尽
-                          </span>
-                        )}
-                        {claWeeklyRem === 0 && (
-                          <span
-                            className="badge"
-                            style={{ background: "rgba(239, 68, 68, 0.15)", color: "#f87171", border: "1px solid rgba(239, 68, 68, 0.3)", fontSize: 10, padding: "1px 5px" }}
-                          >
-                            Claude周额用尽
-                          </span>
+                          {ag.healthTest && (
+                            <span
+                              style={{
+                                fontSize: 10,
+                                fontWeight: 700,
+                                color: ag.healthTest.ok ? "#10b981" : "#f87171",
+                              }}
+                              title={ag.healthTest.message}
+                            >
+                              {ag.healthTest.ok ? "200" : ag.healthTest.status}
+                            </span>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          className={`cockpit-icon-btn ${ag.active ? "cockpit-icon-btn--active" : ""}`}
+                          style={{ width: 22, height: 22 }}
+                          data-tip={ag.active ? "Antigravity 当前账号" : "切换 Antigravity 到此账号"}
+                          disabled={switchingId === ag.id}
+                          onClick={() => onSwitch(ag)}
+                        >
+                          <IconPlay style={{ width: 12, height: 12 }} />
+                        </button>
+                      </div>
+                      <div className="cockpit-table-cell-metrics">
+                        <span>Cla周: <strong className={claRem !== null ? quotaToneClasses(claRem).text : ""}>{claRem ?? 100}%</strong></span>
+                        <span>Gem周: <strong className={gemRem !== null ? quotaToneClasses(gemRem).text : ""}>{gemRem ?? 100}%</strong></span>
+                        {argonRem !== null && (
+                          <span>Argon: <strong className={quotaToneClasses(argonRem).text}>{argonRem}%</strong></span>
                         )}
                       </div>
-                      <div style={{ fontSize: 11, color: "var(--muted)", display: "flex", gap: 10 }}>
-                        <span>Cla周: <strong style={{ color: claWeeklyRem > 20 ? "#34d399" : "#f87171" }}>{claWeeklyRem}%</strong></span>
-                        <span>Gem周: <strong style={{ color: gemWeeklyRem > 20 ? "#34d399" : "#f87171" }}>{gemWeeklyRem}%</strong></span>
-                        {argonWeeklyRem !== null && (
-                          <span>Argon周: <strong style={{ color: argonWeeklyRem > 0 ? "#c084fc" : "#f87171" }}>{argonWeeklyRem}%</strong></span>
-                        )}
+                      <div className="cockpit-mini-bar-track">
+                        <div className={`cockpit-mini-bar-fill ${agTones.bar}`} style={{ width: `${agBarPct}%` }} />
                       </div>
                     </div>
-                  ) : acc.provider === "xai" ? (
-                    <span>
-                      周配额剩余 {Math.max(0, Math.min(100, Math.round(100 - (acc.quota?.weeklyPercent ?? 0))))}%
-                    </span>
                   ) : (
-                    <span>
-                      5-Week 剩余 {Math.max(0, Math.min(100, Math.round(100 - (acc.quota?.monthlyPercent ?? 0))))}%
-                    </span>
-                  )}
-                </td>
-                <td style={{ fontSize: 12, color: "var(--muted)", fontFamily: "monospace" }}>
-                  {formatCockpitDate(acc.updatedAt)}
-                </td>
-                <td style={{ textAlign: "right" }}>
-                  <div className="cockpit-card-actions" style={{ justifyContent: "flex-end" }}>
-                    {/* Real model health test button */}
                     <button
                       type="button"
-                      className="cockpit-icon-btn"
-                      data-tip="真实模型调用健康检测 (向上游发起极简 Prompt 探测真实可用性与连通性)"
-                      disabled={isTestingHealth}
-                      onClick={() => onTestHealth?.(acc)}
+                      className="cockpit-channel-add-btn"
+                      data-tip={`为 ${group.email} 登录添加 Google Antigravity`}
+                      onClick={() => onAddPlatform(group.email, "google-antigravity")}
                     >
-                      <IconActivity
-                        style={{
-                          width: 14,
-                          height: 14,
-                          color: isTestingHealth ? "#f59e0b" : "#38bdf8",
-                        }}
-                        className={isTestingHealth ? "spin" : ""}
-                      />
+                      + 添加 Antigravity
                     </button>
-                    {/* Pause / Resume account toggle button */}
-                    {onTogglePause && (
+                  )}
+                </td>
+
+                {/* Column 2: AI Studio (Local Statistics) */}
+                <td>
+                  {ai ? (
+                    <div className="cockpit-table-cell-col" style={{ minWidth: 168 }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                        <span
+                          className="cockpit-key-pill"
+                          title={`点击修改或解绑 AI Studio Key (${ai.apiKey})\n今日 Hydrogen: ${ai.quota?.hydrogenUsedToday ?? 0}/${ai.quota?.hydrogenLimit ?? 50}\n今日 Flash: ${ai.quota?.flashUsedToday ?? 0}/${ai.quota?.flashLimit ?? 50}`}
+                          onClick={() => onEditAiStudioKey(group)}
+                        >
+                          <span>🔑</span>
+                          <span>{ai.apiKey.slice(0, 6)}...{ai.apiKey.slice(-4)}</span>
+                        </span>
+                        <span
+                          className={`ag-quota-pct ${quotaToneClasses(ai.quota?.remainingPercent ?? 100).text}`}
+                          style={{ fontSize: 11.5 }}
+                        >
+                          {ai.quota?.dailyExhausted ? "已耗尽" : ai.quota?.inCooldown ? "冷却中" : `${ai.quota?.remainingPercent ?? 100}%`}
+                        </span>
+                      </div>
+                      <div className="cockpit-table-cell-metrics">
+                        <span>
+                          今日: <strong>{ai.quota?.requestsToday ?? 0}</strong>/{ai.quota?.dailyRequestLimit ?? 50}次
+                        </span>
+                        <span>
+                          Tok: <strong>{formatCompactTokens(ai.quota?.tokensToday ?? 0)}</strong>/{formatCompactTokens(ai.quota?.dailyTokenLimit ?? 10_000_000)}
+                        </span>
+                      </div>
+                      <div className="cockpit-mini-bar-track">
+                        <div
+                          className={`cockpit-mini-bar-fill ${quotaToneClasses(ai.quota?.remainingPercent ?? 100).bar}`}
+                          style={{ width: `${ai.quota?.remainingPercent ?? 100}%` }}
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className="cockpit-channel-add-btn"
+                      data-tip={`为 ${group.email} 关联 Google AI Studio API Key`}
+                      onClick={() => onEditAiStudioKey(group)}
+                    >
+                      + 关联 AI Studio Key
+                    </button>
+                  )}
+                </td>
+
+                {/* Column 3: ChatGPT / Codex */}
+                <td>
+                  {cg ? (
+                    (() => {
+                      const shortPct = cg.quota?.shortPercent ?? cg.quota?.fiveHourPercent;
+                      const shortRem = typeof shortPct === "number" ? Math.max(0, Math.min(100, Math.round(100 - shortPct))) : null;
+                      const weeklyRem = typeof cg.quota?.weeklyPercent === "number"
+                        ? Math.max(0, Math.min(100, Math.round(100 - cg.quota.weeklyPercent)))
+                        : null;
+                      const monthRem = typeof cg.quota?.monthlyPercent === "number"
+                        ? Math.max(0, Math.min(100, Math.round(100 - cg.quota.monthlyPercent)))
+                        : 100;
+                      const govRem = weeklyRem ?? monthRem;
+                      const cgTones = quotaToneClasses(govRem);
+                      return (
+                        <div className="cockpit-table-cell-col" style={{ minWidth: 145 }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                              <span className={getPlanBadgeClass(cg.plan)} style={{ fontSize: 10, padding: "1px 6px" }}>
+                                {getPlanText(cg.plan)}
+                              </span>
+                              {cg.paused && (
+                                <span style={{ fontSize: 10, color: "#f87171", fontWeight: 600 }}>已暂停</span>
+                              )}
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+                              <button
+                                type="button"
+                                className={`cockpit-icon-btn ${cg.active ? "cockpit-icon-btn--active" : ""}`}
+                                style={{ width: 22, height: 22 }}
+                                data-tip={cg.active ? "ChatGPT 当前账号" : "切换 ChatGPT 到此账号"}
+                                disabled={switchingId === cg.id}
+                                onClick={() => onSwitch(cg)}
+                              >
+                                <IconPlay style={{ width: 12, height: 12 }} />
+                              </button>
+                              <button
+                                type="button"
+                                className="cockpit-icon-btn"
+                                style={{ width: 22, height: 22 }}
+                                data-tip="刷新 ChatGPT 配额"
+                                disabled={refreshingId === cg.id}
+                                onClick={() => onRefresh(cg)}
+                              >
+                                <IconRefresh style={{ width: 12, height: 12 }} className={refreshingId === cg.id ? "spin" : ""} />
+                              </button>
+                            </div>
+                          </div>
+                          <div className="cockpit-table-cell-metrics">
+                            {shortRem !== null && (
+                              <span>5h: <strong className={quotaToneClasses(shortRem).text}>{shortRem}%</strong></span>
+                            )}
+                            {weeklyRem !== null ? (
+                              <span>周: <strong className={quotaToneClasses(weeklyRem).text}>{weeklyRem}%</strong></span>
+                            ) : (
+                              <span>5W: <strong className={cgTones.text}>{monthRem}%</strong></span>
+                            )}
+                          </div>
+                          <div className="cockpit-mini-bar-track">
+                            <div className={`cockpit-mini-bar-fill ${cgTones.bar}`} style={{ width: `${govRem}%` }} />
+                          </div>
+                        </div>
+                      );
+                    })()
+                  ) : (
+                    <button
+                      type="button"
+                      className="cockpit-channel-add-btn"
+                      data-tip={`为 ${group.email} 添加 ChatGPT / Codex 账号`}
+                      onClick={() => onAddPlatform(group.email, "openai")}
+                    >
+                      + 添加 ChatGPT
+                    </button>
+                  )}
+                </td>
+
+                {/* Column 4: xAI Grok */}
+                <td>
+                  {gk ? (
+                    (() => {
+                      const remainPct = Math.max(0, Math.min(100, Math.round(100 - (gk.quota?.weeklyPercent ?? 0))));
+                      const gkTones = quotaToneClasses(remainPct);
+                      return (
+                        <div className="cockpit-table-cell-col" style={{ minWidth: 135 }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                            <span className={getPlanBadgeClass(gk.plan)} style={{ fontSize: 10, padding: "1px 6px" }}>
+                              {getPlanText(gk.plan)}
+                            </span>
+                            <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+                              <button
+                                type="button"
+                                className={`cockpit-icon-btn ${gk.active ? "cockpit-icon-btn--active" : ""}`}
+                                style={{ width: 22, height: 22 }}
+                                data-tip={gk.active ? "Grok 当前账号" : "切换 Grok 到此账号"}
+                                disabled={switchingId === gk.id}
+                                onClick={() => onSwitch(gk)}
+                              >
+                                <IconPlay style={{ width: 12, height: 12 }} />
+                              </button>
+                              <button
+                                type="button"
+                                className="cockpit-icon-btn"
+                                style={{ width: 22, height: 22 }}
+                                data-tip="刷新 Grok 配额"
+                                disabled={refreshingId === gk.id}
+                                onClick={() => onRefresh(gk)}
+                              >
+                                <IconRefresh style={{ width: 12, height: 12 }} className={refreshingId === gk.id ? "spin" : ""} />
+                              </button>
+                            </div>
+                          </div>
+                          <div className="cockpit-table-cell-metrics">
+                            <span>周剩余: <strong className={gkTones.text}>{remainPct}%</strong></span>
+                          </div>
+                          <div className="cockpit-mini-bar-track">
+                            <div className={`cockpit-mini-bar-fill ${gkTones.bar}`} style={{ width: `${remainPct}%` }} />
+                          </div>
+                        </div>
+                      );
+                    })()
+                  ) : (
+                    <button
+                      type="button"
+                      className="cockpit-channel-add-btn"
+                      data-tip={`为 ${group.email} 授权添加 xAI Grok`}
+                      onClick={() => onAddPlatform(group.email, "xai")}
+                    >
+                      + 添加 Grok
+                    </button>
+                  )}
+                </td>
+
+                <td style={{ fontSize: 11.5, color: "var(--muted)", fontFamily: "monospace", whiteSpace: "nowrap" }}>
+                  {formatCockpitDate(group.updatedAt)}
+                </td>
+
+                {/* Group Row Actions */}
+                <td style={{ textAlign: "right" }}>
+                  <div className="cockpit-card-actions" style={{ justifyContent: "flex-end" }}>
+                    {(ag || gk) && onTestHealth && (
                       <button
                         type="button"
-                        className={`cockpit-icon-btn ${acc.paused ? "cockpit-icon-btn--primary" : ""}`}
-                        data-tip={acc.paused ? "恢复启用此账号 (重新加入调度池)" : "停用此账号 (隔离故障，不参与调度与路由)"}
-                        disabled={pausingId === acc.id}
-                        onClick={() => onTogglePause(acc, !acc.paused)}
+                        className="cockpit-icon-btn"
+                        data-tip="真实模型调用健康检测"
+                        disabled={isTestingHealth}
+                        onClick={() => onTestHealth((ag ?? gk)!)}
                       >
-                        {pausingId === acc.id ? (
+                        <IconActivity
+                          style={{ width: 14, height: 14, color: isTestingHealth ? "#f59e0b" : "#38bdf8" }}
+                          className={isTestingHealth ? "spin" : ""}
+                        />
+                      </button>
+                    )}
+                    {primaryOAuth && onTogglePause && (
+                      <button
+                        type="button"
+                        className={`cockpit-icon-btn ${primaryOAuth.paused ? "cockpit-icon-btn--primary" : ""}`}
+                        data-tip={primaryOAuth.paused ? "恢复启用账号" : "停用账号"}
+                        disabled={pausingId === primaryOAuth.id}
+                        onClick={() => onTogglePause(primaryOAuth, !primaryOAuth.paused)}
+                      >
+                        {pausingId === primaryOAuth.id ? (
                           <IconRefresh style={{ width: 14, height: 14, animation: "spin 1s linear infinite" }} />
-                        ) : acc.paused ? (
+                        ) : primaryOAuth.paused ? (
                           <IconPower style={{ width: 14, height: 14, color: "#34d399" }} />
                         ) : (
-                          <IconPause
-                            style={{
-                              width: 14,
-                              height: 14,
-                              color: acc.healthTest && !acc.healthTest.ok ? "#f87171" : "var(--muted)",
-                            }}
-                          />
+                          <IconPause style={{ width: 14, height: 14 }} />
                         )}
                       </button>
                     )}
                     <button
                       type="button"
-                      className={`cockpit-icon-btn ${acc.active ? "cockpit-icon-btn--active" : "cockpit-icon-btn--primary"}`}
-                      data-tip={
-                        acc.active
-                          ? acc.provider === "google-antigravity"
-                            ? "当前正在使用的账号 (已同步至 Antigravity IDE)"
-                            : "当前正在使用的账号 (已激活)"
-                          : acc.provider === "google-antigravity"
-                          ? "切换 Antigravity 到此账号并同步至 IDE"
-                          : "设为当前账号"
-                      }
-                      disabled={isSwitching}
-                      onClick={() => onSwitch(acc)}
+                      className="cockpit-icon-btn"
+                      data-tip="刷新该邮箱全部已开通额度"
+                      disabled={isRefreshingGroup}
+                      onClick={() => onRefreshGroup(group)}
                     >
-                      {isSwitching ? (
-                        <IconRefresh style={{ width: 14, height: 14, animation: "spin 1s linear infinite" }} />
-                      ) : (
-                        <IconPlay
-                          style={{
-                            width: 14,
-                            height: 14,
-                            color: acc.active ? "#00c950" : undefined,
-                          }}
-                        />
-                      )}
+                      <IconRefresh style={{ width: 14, height: 14 }} className={isRefreshingGroup ? "spin" : ""} />
                     </button>
                     <button
                       type="button"
                       className="cockpit-icon-btn"
-                      data-tip="刷新配额"
-                      disabled={isRefreshing}
-                      onClick={() => onRefresh(acc)}
+                      data-tip={ai ? "修改/解绑 AI Studio Key" : "关联 AI Studio Key"}
+                      onClick={() => onEditAiStudioKey(group)}
                     >
-                      <IconRefresh
-                        style={{ width: 14, height: 14 }}
-                        className={isRefreshing ? "spin" : ""}
-                      />
+                      <span style={{ fontSize: 13 }}>🔑</span>
                     </button>
-                    <button
-                      type="button"
-                      className="cockpit-icon-btn"
-                      data-tip="修改别名备注"
-                      onClick={() => onEditAlias(acc)}
-                    >
-                      <IconPencil style={{ width: 14, height: 14 }} />
-                    </button>
+                    {primaryOAuth && (
+                      <button
+                        type="button"
+                        className="cockpit-icon-btn"
+                        data-tip="修改备注别名"
+                        onClick={() => onEditAlias(primaryOAuth)}
+                      >
+                        <IconPencil style={{ width: 14, height: 14 }} />
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="cockpit-icon-btn"
                       data-tip={isCopied ? "已复制" : "复制邮箱"}
-                      onClick={() => onCopy(acc.email || acc.id, acc.id)}
+                      onClick={() => onCopy(group.email, group.emailKey)}
                     >
                       {isCopied ? (
                         <IconCheck style={{ width: 14, height: 14, color: "#10b981" }} />
@@ -504,8 +596,8 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                     <button
                       type="button"
                       className="cockpit-icon-btn cockpit-icon-btn--danger"
-                      data-tip="移除账号"
-                      onClick={() => onRemove(acc)}
+                      data-tip="移除此邮箱下的账号配置"
+                      onClick={() => onRemoveGroup(group)}
                     >
                       <IconTrash style={{ width: 14, height: 14 }} />
                     </button>

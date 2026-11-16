@@ -1,3 +1,5 @@
+@import "./accounts-channels.css";
+
 /* ── Cockpit-style Top-level Accounts & Quota Dashboard ── */
 
 .main-inner:has(.cockpit-accounts-page) {

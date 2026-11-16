@@ -132,7 +132,7 @@ export const CockpitToolbar: React.FC<CockpitToolbarProps> = ({
             className="cockpit-filter-select"
             value={statusFilter}
             onChange={e => onStatusFilterChange(e.target.value)}
-            title="按账号活跃与健康状态筛选"
+            title="按账号活跃、健康状态或渠道开通情况筛选"
           >
             <option value="all">状态: 全部 ({totalDisplayed})</option>
             <option value="active">当前使用中</option>
@@ -140,6 +140,11 @@ export const CockpitToolbar: React.FC<CockpitToolbarProps> = ({
             <option value="unusable">异常/失效 (需停用)</option>
             <option value="paused">已停用/已暂停</option>
             <option value="reauth">需重新登录</option>
+            <option disabled value="__ch_sep__" style={{ color: "var(--muted)" }}>──────────</option>
+            <option value="has-aistudio">已关联 AI Studio Key</option>
+            <option value="no-aistudio">未关联 AI Studio Key</option>
+            <option value="has-chatgpt">已开通 ChatGPT</option>
+            <option value="has-grok">已开通 Grok</option>
           </select>
 
           {/* Membership Tier & Model Tier filter dropdown */}
@@ -165,7 +170,7 @@ export const CockpitToolbar: React.FC<CockpitToolbarProps> = ({
           <select
             className="cockpit-filter-select"
             value={sortBy}
-            onChange={e => onSortByChange(e.target.value as any)}
+            onChange={e => onSortByChange(e.target.value as "quota" | "reset" | "email")}
           >
             <option value="quota">按综合配额</option>
             <option value="reset">按最近重置</option>
@@ -272,7 +277,7 @@ export const CockpitToolbar: React.FC<CockpitToolbarProps> = ({
           <span>全选</span>
         </label>
         <div>
-          <span>已就绪 {totalDisplayed} 个账号</span>
+          <span>已就绪 {totalDisplayed} 个邮箱账号</span>
           {selectedCount > 0 && (
             <span style={{ marginLeft: 8, color: "#3b82f6", fontWeight: 600 }}>
               · 已选中 {selectedCount} 个

@@ -10,12 +10,43 @@ export interface AccountHealthTestState {
   testedAt: number;
 }
 
+export interface AiStudioLocalQuota {
+  entryId: string;
+  maskedKey: string;
+  planTier: "free" | "pro" | "ultra";
+  requestsToday: number;
+  dailyRequestLimit: number;
+  hydrogenUsedToday: number;
+  hydrogenLimit: number;
+  flashUsedToday: number;
+  flashLimit: number;
+  argonUsedToday: number;
+  argonLimit: number;
+  tokensToday: number;
+  dailyTokenLimit: number;
+  remainingPercent: number;
+  inCooldown: boolean;
+  dailyExhausted: boolean;
+  cooldownUntil?: number;
+  resetAt: number;
+  lastUsedAt?: number;
+}
+
+export interface StandaloneAiStudioKey {
+  entryId: string;
+  email: string;
+  aiStudioApiKey: string;
+  aiStudioQuota: AiStudioLocalQuota;
+}
+
 export interface UnifiedAccountItem {
   id: string;
-  provider: string; // "google-antigravity" | "openai"
+  provider: string; // "google-antigravity" | "openai" | "xai"
   providerLabel: string;
   email: string;
   alias?: string;
+  aiStudioApiKey?: string;
+  aiStudioQuota?: AiStudioLocalQuota | null;
   active: boolean;
   plan?: string;
   quota?: AccountQuota | null;
@@ -32,6 +63,28 @@ export interface UnifiedAccountItem {
   teamName?: string;
   loginMethod?: string;
   resetCount?: number;
+}
+
+export interface EmailAccountGroup {
+  emailKey: string;
+  email: string;
+  alias?: string;
+  antigravity?: UnifiedAccountItem;
+  aiStudio?: {
+    apiKey: string;
+    quota?: AiStudioLocalQuota | null;
+    planTier: "free" | "pro" | "ultra";
+    linkedAccountId?: string;
+  };
+  chatgpt?: UnifiedAccountItem;
+  grok?: UnifiedAccountItem;
+  anyActive: boolean;
+  allPaused: boolean;
+  anyUnusable: boolean;
+  hasArgon: boolean;
+  primaryPlan?: string;
+  updatedAt?: number;
+  createdAt?: string;
 }
 
 /**
