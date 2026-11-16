@@ -110,12 +110,28 @@ function decodeJwtPayload(token: string): XaiJwtPayload | undefined {
   }
 }
 
-function getTokenIdentity(accessToken: string, idToken: string | undefined): { accountId?: string; email?: string } {
+export function inferXaiPlanFromAccessToken(accessToken: string | undefined): string | undefined {
+  if (!accessToken) return undefined;
+  const payload = decodeJwtPayload(accessToken);
+  if (!payload) return undefined;
+  if (typeof payload.plan === "string" && payload.plan.trim()) return payload.plan.trim().toLowerCase();
+  if (typeof payload.tier === "number" && Number.isFinite(payload.tier)) {
+    if (payload.tier >= 3) return "ultra";
+    if (payload.tier >= 2) return "pro";
+    if (payload.tier >= 1) return "plus";
+    return "free";
+  }
+  if (typeof payload.tier === "string" && payload.tier.trim()) return payload.tier.trim().toLowerCase();
+  return undefined;
+}
+
+function getTokenIdentity(accessToken: string, idToken: string | undefined): { accountId?: string; email?: string; plan?: string } {
   const payload = (idToken ? decodeJwtPayload(idToken) : undefined) ?? decodeJwtPayload(accessToken);
   const accountId = typeof payload?.sub === "string" && payload.sub.length > 0 ? payload.sub : undefined;
   const email =
     typeof payload?.email === "string" && payload.email.length > 0 ? payload.email.toLowerCase() : undefined;
-  return { accountId, email };
+  const plan = inferXaiPlanFromAccessToken(accessToken) ?? inferXaiPlanFromAccessToken(idToken);
+  return { accountId, email, plan };
 }
 
 export class XaiTokenRequestError extends Error {
@@ -334,13 +350,14 @@ function credentialsFromTokenPayload(payload: XaiTokenPayload, refreshFallback =
   const expiresIn =
     typeof payload.expires_in === "number" && Number.isFinite(payload.expires_in) ? payload.expires_in : 3600;
   const idToken = typeof payload.id_token === "string" ? payload.id_token : undefined;
-  const { accountId, email } = getTokenIdentity(payload.access_token, idToken);
+  const { accountId, email, plan } = getTokenIdentity(payload.access_token, idToken);
   return {
     refresh,
     access: payload.access_token,
     expires: Date.now() + expiresIn * 1000 - XAI_OAUTH_REFRESH_SKEW_MS,
     accountId,
     email,
+    ...(plan ? { plan } : {}),
   };
 }
 

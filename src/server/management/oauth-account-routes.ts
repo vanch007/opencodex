@@ -527,6 +527,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       projectOAuthAccountHealth,
       projectStoredOAuthAccountHealth,
     } = await import("../../oauth/health");
+    const { inferXaiPlanFromAccessToken } = provider === "xai"
+      ? await import("../../oauth/xai")
+      : { inferXaiPlanFromAccessToken: undefined };
     const projectAccounts = () => {
       const set = getAccountSet(provider);
       const maskEmails = emailMaskingEnabled(config);
@@ -535,6 +538,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         ...(provider === "anthropic2" ? { provider } : {}), activeAccountId: current.activeAccountId ?? null,
         accounts: (current.accounts ?? []).map(summary => {
           const full = set?.accounts.find(account => account.id === summary.id);
+          const resolvedPlan = summary.plan
+            ?? full?.credential.plan
+            ?? (provider === "xai" ? (inferXaiPlanFromAccessToken?.(full?.credential.access) ?? "free") : undefined);
           const health = full
             ? projectStoredOAuthAccountHealth(provider, full)
             : projectOAuthAccountHealth({
@@ -544,7 +550,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
           const maskedLabel = maskedAccountLabel(full?.credential.email);
           // `maskedLabel` stays masked for tray surfaces; `accountLabel` follows privacy.maskEmails.
           const accountLabel = accountDisplayLabel(full?.credential.email, maskEmails);
-          return { ...summary, ...(maskedLabel ? { maskedLabel } : {}), ...(accountLabel ? { accountLabel } : {}),
+          return { ...summary, ...(resolvedPlan !== undefined ? { plan: resolvedPlan } : {}), ...(full?.aiStudioApiKey ? { aiStudioApiKey: full.aiStudioApiKey } : {}), ...(maskedLabel ? { maskedLabel } : {}), ...(accountLabel ? { accountLabel } : {}),
             ...oauthAccountHealthFields(provider, summary.id, health), quotaMode,
             ...(supportsPause ? { paused: full?.paused === true, ...(full?.pauseDetails ? { pauseDetails: full.pauseDetails } : {}) } : {}),
             ...(isAnthropicOAuthInstance(provider) && supportsPause ? { autoSwitchThresholdOverride: full?.autoSwitchThresholdOverride ?? null,
@@ -563,7 +569,21 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // path rather than rejected -- the GUI sends it for every provider on a manual
     // refresh, and a 400 would report an error for what is simply a no-op.
     const passiveQuota = url.searchParams.get("quota") === "1" && quotaMode === "passive";
-    if (!wantQuota && !passiveQuota) return jsonResponse(projectAccounts());
+    if (!wantQuota && !passiveQuota) {
+      const projected = projectAccounts();
+      if (provider === "google-antigravity") {
+        const { enrichAntigravityAiStudioPayload } = await import("./ai-studio-local-quota");
+        const maskEmails = emailMaskingEnabled(config);
+        const enriched = await enrichAntigravityAiStudioPayload({
+          config,
+          accounts: projected.accounts,
+          fullAccounts: getAccountSet("google-antigravity")?.accounts ?? [],
+          formatEmail: em => accountDisplayLabel(em, maskEmails) ?? em,
+        });
+        return jsonResponse({ ...projected, ...enriched });
+      }
+      return jsonResponse(projected);
+    }
     const forceRefresh = url.searchParams.get("refresh") === "1";
     // Probing may refresh the active credential and mark needsReauth — project health
     // from the post-probe store so the response is not stale.
@@ -637,30 +657,46 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     }
 
     const projected = projectAccounts();
-    return jsonResponse({
-      ...(provider === "anthropic2" ? { provider } : {}), activeAccountId: projected.activeAccountId,
-      accounts: projected.accounts.map(account => {
-        const row = byId.get(account.id);
-        // #8397: a passive provider with no observation for this account yet says so.
-        if (!row) return passiveQuota ? { ...account, quotaUnknownReason: "passive_not_observed" } : account;
-        if (config.providers[provider] !== quotaProvider || row.isCurrent?.() === false) {
-          return { ...account, quota: null, quotaUnavailable: true };
-        }
-        let quota = row.quota;
-        if (provider === "google-antigravity" && quota?.customWindows && (account.plan ?? "").toLowerCase().includes("free")) {
-          quota = {
-            ...quota,
-            customWindows: quota.customWindows.filter(w => !/argon/i.test(w.label) && w.modelId !== "gemini-4-argon"),
-          };
-        }
-        return {
-          ...account,
-          quota,
-          ...(quotaMode === "probe" ? { quotaUnavailable: row.unavailable === true,
-            ...(row.unavailable && row.quotaFailure && row.quotaFailureIsCurrent?.() === true ? { quotaFailure: row.quotaFailure } : {}),
-          } : {}),
+    const mappedAccounts = projected.accounts.map(account => {
+      const row = byId.get(account.id);
+      // #8397: a passive provider with no observation for this account yet says so.
+      if (!row) return passiveQuota ? { ...account, quotaUnknownReason: "passive_not_observed" } : account;
+      if (config.providers[provider] !== quotaProvider || row.isCurrent?.() === false) {
+        return { ...account, quota: null, quotaUnavailable: true };
+      }
+      let quota = row.quota;
+      if (provider === "google-antigravity" && quota?.customWindows && (account.plan ?? "").toLowerCase().includes("free")) {
+        quota = {
+          ...quota,
+          customWindows: quota.customWindows.filter(w => !/argon/i.test(w.label) && w.modelId !== "gemini-4-argon"),
         };
-      }),
+      }
+      return {
+        ...account,
+        quota,
+        ...(quotaMode === "probe" ? { quotaUnavailable: row.unavailable === true,
+          ...(row.unavailable && row.quotaFailure && row.quotaFailureIsCurrent?.() === true ? { quotaFailure: row.quotaFailure } : {}),
+        } : {}),
+      };
+    });
+    if (provider === "google-antigravity") {
+      const { enrichAntigravityAiStudioPayload } = await import("./ai-studio-local-quota");
+      const maskEmails = emailMaskingEnabled(config);
+      const enriched = await enrichAntigravityAiStudioPayload({
+        config,
+        accounts: mappedAccounts,
+        fullAccounts: getAccountSet("google-antigravity")?.accounts ?? [],
+        formatEmail: em => accountDisplayLabel(em, maskEmails) ?? em,
+      });
+      return jsonResponse({
+        activeAccountId: projected.activeAccountId,
+        ...enriched,
+      });
+    }
+    return jsonResponse({
+      ...(provider === "anthropic2" ? { provider } : {}),
+      activeAccountId: projected.activeAccountId,
+      accounts: mappedAccounts,
     });
   }
   if (url.pathname === "/api/oauth/accounts/affinity-reset" && req.method === "PUT") {
@@ -1203,6 +1239,51 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { setAccountAlias } = await import("../../oauth/store");
     if (!(await setAccountAlias(provider, accountId, alias || undefined))) return jsonResponse({ error: "account not found" }, 404);
     return jsonResponse({ ok: true, provider, accountId, alias: alias || null });
+  }
+  if (url.pathname === "/api/oauth/accounts/ai-studio-key" && req.method === "PUT") {
+    const body = await readManagementJsonBodyOr(req, {}) as { provider?: unknown; accountId?: unknown; email?: unknown; apiKey?: unknown };
+    const provider = typeof body.provider === "string" && body.provider.trim() ? body.provider.trim().toLowerCase() : "google-antigravity";
+    const accountId = typeof body.accountId === "string" ? body.accountId.trim() : "";
+    const email = typeof body.email === "string" ? body.email.trim() : "";
+    let apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+    // Clean quotes, label prefixes (api_key=, key:, Bearer )
+    apiKey = apiKey.replace(/^["'`]|["'`]$/g, "").trim();
+    apiKey = apiKey.replace(/^(?:(?:api_?key|key|token)\s*[:=]\s*|bearer\s+)/i, "").trim().replace(/^["'`]|["'`]$/g, "");
+
+    if (provider !== "google-antigravity") return jsonResponse({ error: "ai studio key is only supported for google-antigravity" }, 400);
+    if (!accountId && (!email || !email.includes("@"))) return jsonResponse({ error: "missing accountId or email" }, 400);
+    if (apiKey && (apiKey.length < 20 || apiKey.length > 128 || /[\s\x00-\x1f\x7f]/.test(apiKey))) {
+      return jsonResponse({ error: "invalid Google AI Studio API key format (expected 20-128 non-whitespace characters, usually starting with AIza...)" }, 400);
+    }
+    const { setAccountAiStudioApiKey, getAccountSet } = await import("../../oauth/store");
+    const existingSet = getAccountSet(provider);
+    const resolvedAccountId = accountId || existingSet?.accounts.find(
+      a => a.credential?.email?.trim().toLowerCase() === email.toLowerCase(),
+    )?.id || "";
+    if (resolvedAccountId && !(await setAccountAiStudioApiKey(provider, resolvedAccountId, apiKey || undefined))) {
+      return jsonResponse({ error: "account not found" }, 404);
+    }
+
+    try {
+      const updatedSet = getAccountSet(provider);
+      const { syncGoogleApiKeyPool } = await import("./ai-studio-local-quota");
+      const { saveConfigPreservingClaudeCode } = await import("../../config");
+      syncGoogleApiKeyPool({
+        config,
+        antigravityAccounts: (updatedSet?.accounts ?? []).map(a => ({
+          id: a.id,
+          alias: a.alias,
+          email: a.credential?.email,
+          aiStudioApiKey: a.aiStudioApiKey,
+        })),
+        ...(!resolvedAccountId && email ? { standaloneUpdate: { email, apiKey } } : {}),
+      });
+      saveConfigPreservingClaudeCode(config);
+    } catch {
+      // non-blocking sync
+    }
+
+    return jsonResponse({ ok: true, provider, ...(resolvedAccountId ? { accountId: resolvedAccountId } : { email }), apiKey: apiKey || null });
   }
   if (url.pathname === "/api/oauth/accounts" && req.method === "DELETE") {
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();

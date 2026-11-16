@@ -98,6 +98,8 @@ export interface ProviderAccount {
   loginOrigin?: "kiro-device";
   /** User-owned display label; never participates in auth identity or routing. */
   alias?: string;
+  /** Associated Google AI Studio API key for unified key-pool management. */
+  aiStudioApiKey?: string;
   credential: OAuthCredentials;
   /** Terminal refresh failure (invalid_grant / reused / revoked) — re-login required. */
   needsReauth?: boolean;

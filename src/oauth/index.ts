@@ -1789,6 +1789,7 @@ export async function runLogin(
 export interface OAuthAccountSummary {
   id: string;
   alias?: string;
+  aiStudioApiKey?: string;
   email?: string;
   active: boolean;
   needsReauth?: boolean;
@@ -1830,6 +1831,7 @@ export function getLoginStatus(provider: string, maskEmails = true, flowId?: str
   const accounts: OAuthAccountSummary[] | undefined = set?.accounts.map(a => ({
     id: a.id,
     ...(a.alias ? { alias: a.alias } : {}),
+    ...(a.aiStudioApiKey ? { aiStudioApiKey: a.aiStudioApiKey } : {}),
     email: projectEmail(a.credential.email, maskEmails) ?? undefined,
     active: a.id === set.activeAccountId,
     ...(accountNeedsReauthForStatus(provider, a) ? { needsReauth: true } : {}),

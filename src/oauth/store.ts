@@ -684,6 +684,9 @@ function normalizeAccount(value: unknown): ProviderAccount | null {
   if (!credential) return null;
   const account: ProviderAccount = { id: candidate.id, credential };
   if (typeof candidate.alias === "string" && candidate.alias.trim()) account.alias = candidate.alias.trim();
+  if (typeof candidate.aiStudioApiKey === "string" && candidate.aiStudioApiKey.trim()) {
+    account.aiStudioApiKey = candidate.aiStudioApiKey.trim();
+  }
   if (candidate.needsReauth === true) account.needsReauth = true;
   if (candidate.refreshAttentionGeneration === credentialGeneration(credential)) {
     account.refreshAttentionGeneration = candidate.refreshAttentionGeneration;
@@ -1440,6 +1443,16 @@ export async function setAccountAlias(provider: string, accountId: string, alias
     else delete account.alias;
     return true;
   }, [provider, accountId, alias]);
+}
+
+export async function setAccountAiStudioApiKey(provider: string, accountId: string, apiKey: string | undefined): Promise<boolean> {
+  return await mutateStore(store => {
+    const account = store[provider]?.accounts.find(a => a.id === accountId);
+    if (!account) return false;
+    if (apiKey) account.aiStudioApiKey = apiKey;
+    else delete account.aiStudioApiKey;
+    return true;
+  }, [provider, accountId, apiKey]);
 }
 
 export type SetAccountPausedResult =
