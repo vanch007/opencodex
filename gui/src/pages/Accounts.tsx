@@ -31,6 +31,8 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
   const [activeTab, setActiveTab] = useState<"overview" | "instances" | "tasks" | "health">("overview");
   const [testingHealthIds, setTestingHealthIds] = useState<Set<string>>(new Set());
   const [isTestingAll, setIsTestingAll] = useState(false);
+  const [pausingId, setPausingId] = useState<string | null>(null);
+  const [isBatchPausing, setIsBatchPausing] = useState(false);
   const [showAddCodexModal, setShowAddCodexModal] = useState(false);
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [oauthBusyProvider, setOauthBusyProvider] = useState<string | null>(null);
@@ -277,12 +279,15 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
           model: string;
           errorCode?: string;
           message: string;
+          paused?: boolean;
         };
+        const willBePaused = result.paused ?? (result.status === 403 || result.status === 401);
         setAccounts(prev =>
           prev.map(a =>
             a.id === item.id && a.provider === item.provider
               ? {
                   ...a,
+                  paused: willBePaused ? true : a.paused,
                   health: {
                     status: result.ok
                       ? "healthy"
@@ -308,6 +313,41 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
         next.delete(item.id);
         return next;
       });
+    }
+  };
+
+  const handleTogglePauseAccount = async (item: UnifiedAccountItem, paused: boolean) => {
+    if (pausingId) return;
+    setPausingId(item.id);
+    try {
+      const url = item.provider === "openai" ? `${apiBase}/api/codex-auth/accounts/pause` : `${apiBase}/api/oauth/accounts/pause`;
+      const body = item.provider === "openai" ? { id: item.id, paused } : { provider: item.provider, accountId: item.id, paused };
+      await fetch(url, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      setAccounts(prev => prev.map(a => (a.id === item.id && a.provider === item.provider ? { ...a, paused } : a)));
+    } finally {
+      setPausingId(null);
+    }
+  };
+
+  const handlePauseAllUnusable = async () => {
+    if (isBatchPausing) return;
+    const unusableAccounts = displayedAccounts.filter(
+      a => !a.paused && ((a.healthTest && !a.healthTest.ok) || a.health?.status === "reauth_required"),
+    );
+    if (unusableAccounts.length === 0) return;
+    setIsBatchPausing(true);
+    try {
+      await Promise.all(
+        unusableAccounts.map(a => {
+          const url = a.provider === "openai" ? `${apiBase}/api/codex-auth/accounts/pause` : `${apiBase}/api/oauth/accounts/pause`;
+          const body = a.provider === "openai" ? { id: a.id, paused: true } : { provider: a.provider, accountId: a.id, paused: true };
+          return fetch(url, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        }),
+      );
+      const unusableSet = new Set(unusableAccounts.map(a => `${a.provider}:${a.id}`));
+      setAccounts(prev => prev.map(a => (unusableSet.has(`${a.provider}:${a.id}`) ? { ...a, paused: true } : a)));
+    } finally {
+      setIsBatchPausing(false);
     }
   };
 
@@ -406,40 +446,23 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
   // Provider counts
   const providerCounts = useMemo(() => {
     const counts: Record<string, number> = {};
-    for (const acc of accounts) {
-      counts[acc.provider] = (counts[acc.provider] ?? 0) + 1;
-    }
+    for (const acc of accounts) counts[acc.provider] = (counts[acc.provider] ?? 0) + 1;
     return counts;
   }, [accounts]);
 
   // Plan & capability statistics for the currently selected provider scope
   const planCounts = useMemo(() => {
     const subset = accounts.filter(a => selectedProvider === "all" || a.provider === selectedProvider);
-    let pro = 0;
-    let free = 0;
-    let ultra = 0;
-    let plus = 0;
-    let argon = 0;
-    let flash = 0;
+    let pro = 0, free = 0, ultra = 0, plus = 0, argon = 0, flash = 0;
     for (const a of subset) {
       const p = (a.plan ?? "").toLowerCase();
       if (p.includes("pro") || p === "g1-pro-tier") pro++;
       if (p.includes("free")) free++;
       if (p.includes("ultra")) ultra++;
       if (p.includes("plus")) plus++;
-      const hasArgon = accountHasArgonTier(a);
-      if (hasArgon) argon++;
-      else flash++;
+      if (accountHasArgonTier(a)) argon++; else flash++;
     }
-    return {
-      total: subset.length,
-      pro,
-      free,
-      ultra,
-      plus,
-      argon,
-      flash,
-    };
+    return { total: subset.length, pro, free, ultra, plus, argon, flash };
   }, [accounts, selectedProvider]);
 
   // Filtered and sorted accounts
@@ -455,6 +478,8 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
           if (!emailMatch && !aliasMatch && !idMatch) return false;
         }
         if (statusFilter === "active" && !acc.active) return false;
+        if (statusFilter === "ready" && (acc.paused || acc.active || (acc.healthTest && !acc.healthTest.ok) || acc.health?.status === "reauth_required")) return false;
+        if (statusFilter === "unusable" && (!acc.paused && !(acc.healthTest && !acc.healthTest.ok) && acc.health?.status !== "reauth_required")) return false;
         if (statusFilter === "paused" && !acc.paused) return false;
         if (statusFilter === "reauth" && acc.health?.status !== "reauth_required") return false;
 
@@ -655,12 +680,16 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
           refreshingId={refreshingId}
           testingHealthIds={testingHealthIds}
           isTestingAll={isTestingAll}
+          pausingId={pausingId}
+          isBatchPausing={isBatchPausing}
           copiedId={outcomeFor("account-table")}
           formatEmail={formatDisplayEmail}
           onToggleSelectAll={toggleSelectAll}
           onToggleSelectOne={toggleSelectOne}
           onSwitch={handleSwitchAccount}
           onRefresh={handleRefreshAccount}
+          onTogglePause={handleTogglePauseAccount}
+          onPauseAllUnusable={handlePauseAllUnusable}
           onTestHealth={handleTestAccountHealth}
           onTestAllHealth={handleTestAllAccountsHealth}
           onEditAlias={handleEditAlias}
@@ -678,11 +707,13 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
               isSwitching={switchingId === acc.id}
               isRefreshing={refreshingId === acc.id}
               isTestingHealth={testingHealthIds.has(acc.id)}
+              pausingId={pausingId}
               copiedId={outcomeFor(acc.id)}
               formatEmail={formatDisplayEmail}
               onToggleSelect={toggleSelectOne}
               onSwitch={handleSwitchAccount}
               onRefresh={handleRefreshAccount}
+              onTogglePause={handleTogglePauseAccount}
               onTestHealth={handleTestAccountHealth}
               onEditAlias={handleEditAlias}
               onCopy={copy}

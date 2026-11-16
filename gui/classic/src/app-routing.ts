@@ -4,6 +4,7 @@ import { normalizeHashPath, splitHashQuery } from "./hash-routing";
 
 export type Page =
   | "dashboard"
+  | "accounts"
   | "startup"
   | "providers"
   | "models"
@@ -20,6 +21,7 @@ export type Page =
 
 export const VALID_PAGES = new Set<Page>([
   "dashboard",
+  "accounts",
   "startup",
   "providers",
   "models",

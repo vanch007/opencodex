@@ -6,6 +6,7 @@ import {
   IconCheck,
   IconCopy,
   IconInfo,
+  IconPause,
   IconPlay,
   IconRefresh,
   IconTag,
@@ -20,11 +21,13 @@ interface CockpitAccountCardProps {
   isSwitching: boolean;
   isRefreshing: boolean;
   isTestingHealth?: boolean;
+  pausingId?: string | null;
   copiedId: string | null;
   formatEmail: (email: string) => string;
   onToggleSelect: (id: string) => void;
   onSwitch: (item: UnifiedAccountItem) => void;
   onRefresh: (item: UnifiedAccountItem) => void;
+  onTogglePause?: (item: UnifiedAccountItem, paused: boolean) => void;
   onTestHealth?: (item: UnifiedAccountItem) => void;
   onEditAlias: (item: UnifiedAccountItem) => void;
   onCopy: (text: string, id: string) => void;
@@ -51,11 +54,13 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
   isSwitching,
   isRefreshing,
   isTestingHealth = false,
+  pausingId = null,
   copiedId,
   formatEmail,
   onToggleSelect,
   onSwitch,
   onRefresh,
+  onTogglePause,
   onTestHealth,
   onEditAlias,
   onCopy,
@@ -99,7 +104,13 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
   const hasArgon = accountHasArgonTier(acc);
 
   return (
-    <div className={`cockpit-card${acc.active ? " cockpit-card--active" : ""}`}>
+    <div
+      className={`cockpit-card${acc.active ? " cockpit-card--active" : ""}`}
+      style={{
+        opacity: acc.paused ? 0.65 : 1,
+        transition: "opacity 0.2s ease, background 0.2s ease",
+      }}
+    >
       {/* ── Card Header ── */}
       <div className="cockpit-card-head">
         <div className="cockpit-card-title-group">
@@ -114,6 +125,52 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
           </span>
         </div>
         <div className="cockpit-card-badges">
+          {acc.paused ? (
+            <span
+              className="badge"
+              style={{
+                background: "rgba(239, 68, 68, 0.15)",
+                color: "#f87171",
+                border: "1px solid rgba(239, 68, 68, 0.35)",
+                fontSize: 10,
+                fontWeight: 600,
+                padding: "1px 5px",
+              }}
+              title="已停用：不参与调度与路由"
+            >
+              已停用
+            </span>
+          ) : acc.healthTest && !acc.healthTest.ok ? (
+            <span
+              className="badge"
+              style={{
+                background: acc.healthTest.status === 403 ? "rgba(239, 68, 68, 0.15)" : "rgba(245, 158, 11, 0.15)",
+                color: acc.healthTest.status === 403 ? "#f87171" : "#fbbf24",
+                border: `1px solid ${acc.healthTest.status === 403 ? "rgba(239, 68, 68, 0.35)" : "rgba(245, 158, 11, 0.35)"}`,
+                fontSize: 10,
+                fontWeight: 600,
+                padding: "1px 5px",
+              }}
+              title={`探测异常 (${acc.healthTest.status}): ${acc.healthTest.message}`}
+            >
+              {acc.healthTest.status === 403 ? "403失效" : acc.healthTest.status === 504 ? "504超时" : "异常"}
+            </span>
+          ) : acc.health?.status === "reauth_required" ? (
+            <span
+              className="badge"
+              style={{
+                background: "rgba(239, 68, 68, 0.15)",
+                color: "#f87171",
+                border: "1px solid rgba(239, 68, 68, 0.35)",
+                fontSize: 10,
+                fontWeight: 600,
+                padding: "1px 5px",
+              }}
+              title="需重新登录授权"
+            >
+              需授权
+            </span>
+          ) : null}
           {acc.active && <span className="cockpit-badge-active">当前</span>}
           {isAntigravity && (
             hasArgon ? (
@@ -394,6 +451,29 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
                 }}
                 className={isTestingHealth ? "spin" : ""}
               />
+            </button>
+          )}
+          {onTogglePause && (
+            <button
+              type="button"
+              className={`cockpit-icon-btn ${acc.paused ? "cockpit-icon-btn--primary" : ""}`}
+              title={acc.paused ? "恢复启用此账号 (重新加入调度池)" : "停用此账号 (隔离故障，不参与调度与路由)"}
+              disabled={pausingId === acc.id}
+              onClick={() => onTogglePause(acc, !acc.paused)}
+            >
+              {pausingId === acc.id ? (
+                <IconRefresh style={{ width: 14, height: 14, animation: "spin 1s linear infinite" }} />
+              ) : acc.paused ? (
+                <IconPlay style={{ width: 14, height: 14, color: "#34d399" }} />
+              ) : (
+                <IconPause
+                  style={{
+                    width: 14,
+                    height: 14,
+                    color: acc.healthTest && !acc.healthTest.ok ? "#f87171" : "var(--muted)",
+                  }}
+                />
+              )}
             </button>
           )}
           <button

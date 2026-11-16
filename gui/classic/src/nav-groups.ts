@@ -15,10 +15,11 @@
  */
 import type { Page } from "./app-routing";
 import type { TKey } from "./i18n/shared";
-import { IconActivity, IconBot, IconBoxes, IconCodex, IconGrid, IconLink, IconMonitor, IconServer } from "./icons";
+import { IconActivity, IconBot, IconBoxes, IconCodex, IconGrid, IconLink, IconMonitor, IconServer, IconUser } from "./icons";
 
 export type NavGroupId =
   | "dashboard"
+  | "accounts"
   | "connect"
   | "codex-set"
   | "providers"
@@ -37,6 +38,7 @@ export interface NavGroup {
 
 export const NAV_GROUPS: readonly NavGroup[] = [
   { id: "dashboard", tkey: "nav.dashboard", Icon: IconGrid, pages: ["dashboard"] },
+  { id: "accounts", tkey: "nav.accounts", Icon: IconUser, pages: ["accounts"] },
   { id: "connect", tkey: "nav.connect", Icon: IconLink, pages: ["integrations"], embedded: ["claude"] },
   { id: "codex-set", tkey: "nav.codexSet", Icon: IconCodex, pages: ["codex-set"] },
   { id: "providers", tkey: "nav.providers", Icon: IconServer, pages: ["providers"] },

@@ -135,8 +135,10 @@ export const CockpitToolbar: React.FC<CockpitToolbarProps> = ({
           >
             <option value="all">状态: 全部 ({totalDisplayed})</option>
             <option value="active">当前使用中</option>
+            <option value="ready">备用就绪</option>
+            <option value="unusable">异常/失效 (需停用)</option>
+            <option value="paused">已停用/已暂停</option>
             <option value="reauth">需重新登录</option>
-            <option value="paused">已暂停</option>
           </select>
 
           {/* Membership Tier & Model Tier filter dropdown */}
