@@ -474,6 +474,5 @@ describe("model routing fails closed on a proven roster omission (#7500)", () =>
     seedGenericPoolSelection(PROVIDER, "acct-55b");
     expect(preferredInitialAccount(rrConfig, PROVIDER, Date.now(), "claude-opus-5-5", "acct-46x")).toBe("acct-55b");
     expect(preferredInitialAccount(rrConfig, PROVIDER, Date.now(), "gemini-3.8-flash-high", "acct-46x")).toBe("acct-55b");
->>>>>>> upstream/dev
   });
 });

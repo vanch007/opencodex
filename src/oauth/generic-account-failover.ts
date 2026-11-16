@@ -554,8 +554,7 @@ function nextAntigravitySibling(
   const order = set.accounts.map(row => row.id);
   const start = order.indexOf(failedAccountId);
   const ring = start >= 0 ? [...order.slice(start + 1), ...order.slice(0, start)] : order;
-  return rankAccountsByHeadroom("google-antigravity",
-    ring.filter(id => id !== failedAccountId && eligible.has(id)), requestedModelId)[0] ?? null;
+  return ring.find(id => id !== failedAccountId && eligible.has(id)) ?? null;
 }
 
 /**
@@ -973,9 +972,7 @@ export function preferredInitialAccount(
   }
   const activeLacks = (providerName === "kiro" || providerName === "google-antigravity")
     && !!active && !!requestedModelId
-    && (isAntigravityExclusiveTierModel(requestedModelId)
-      ? accountListsModel(providerName, active, requestedModelId) !== true
-      : accountListsModel(providerName, active, requestedModelId) === false);
+    && accountListsModel(providerName, active, requestedModelId) === false;
   if (providerName === "google-antigravity" && activeLacks) {
     const route = routeAntigravityModel(config, providerName, active, requestedModelId, now);
     return route.kind === "reroute" ? route.accountId : null;

@@ -189,7 +189,7 @@ export async function fetchGoogleWithRetry(
           continue;
         }
       }
-      if (!retryableGoogleStatus(res.status) || attempt === TRANSIENT_RETRY_MAX_ATTEMPTS - 1 || preferAccountFailover) {
+      if (!retryableGoogleStatus(res.status) || attempt === TRANSIENT_RETRY_MAX_ATTEMPTS - 1) {
         return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, activeRequest, ctx.abortSignal);
       }
       // A 429 may be a transient rate limit (retry) or hard quota exhaustion (do NOT retry —
@@ -240,7 +240,7 @@ export async function fetchGoogleWithRetry(
         throw err;
       }
       lastError = err;
-      if (attempt === TRANSIENT_RETRY_MAX_ATTEMPTS - 1 || preferAccountFailover) throw err;
+      if (attempt === TRANSIENT_RETRY_MAX_ATTEMPTS - 1) throw err;
       sendClass = "transient";
       recovery = isConnectionResetError(err) ? "connection-reset" : undefined;
       retryDelayMs = retryBackoffDelayMs(attempt, {

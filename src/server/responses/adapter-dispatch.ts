@@ -1583,7 +1583,7 @@ export async function prepareAdapterExchange(
       }
       } else {
       while (
-        (upstreamResponse.status === 429 || (upstreamResponse.status >= 502 && upstreamResponse.status <= 504))
+        upstreamResponse.status === 429
         && transportState.genericFailoverAccountId
         && transportState.genericFailovers < transportState.genericFailoverLimit
         && isGenericOAuthFailoverEnabled(config, route.providerName)

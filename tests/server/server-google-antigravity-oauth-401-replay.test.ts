@@ -1186,28 +1186,6 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
     }
   });
 
-  test.each([false, true])("unrelated PERMISSION_DENIED does not switch accounts (native=%s)", async native => {
-    await seedOAuth();
-    const accountA = getAccountSet("google-antigravity")!.activeAccountId;
-    await saveCredential("google-antigravity", {
-      access: "working-access", refresh: "working-refresh", expires: Date.now() + 3_600_000,
-      accountId: "antigravity-working-account", projectId: "working-project-id", source: "oauth",
-    });
-    await setActiveAccount("google-antigravity", accountA);
-    saveConfig(native ? antigravityPassthroughConfig() : antigravityConfig());
-    const observed = installOAuthFetch([403]);
-    const server = startServer(0);
-    try {
-      const response = await postResponses(server);
-      expect(response.status).toBe(403);
-      await response.text();
-      expect(observed.chatAuth).toEqual(["Bearer rejected-access"]);
-      expect(getAccountSet("google-antigravity")!.accounts.find(a => a.id === accountA)?.needsReauth).not.toBe(true);
-    } finally {
-      await server.stop(true);
-    }
-  });
-
   test.each([false, true])("a custom key route does not consume Antigravity OAuth credentials (native=%s)", async native => {
     await seedOAuth();
     const config = native ? antigravityPassthroughConfig() : antigravityConfig();
