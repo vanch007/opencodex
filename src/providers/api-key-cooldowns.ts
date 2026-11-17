@@ -1,8 +1,66 @@
-/** Process-local cooldown state shared by selection validation and key failover. */
+/** Process-local cooldown and 60s load tracking shared by selection validation and key failover. */
 const keyCooldowns = new Map<string, { cooldownUntil: number }>();
+const MINUTE_WINDOW_MS = 60_000;
+const DEFAULT_CONGESTION_COOLDOWN_MS = 3 * 60_000;
+interface MinuteUsageSample {
+  at: number;
+  requests: number;
+  tokens: number;
+}
+const keyMinuteUsage = new Map<string, MinuteUsageSample[]>();
+const aiStudioCongestedUntil = new Map<string, number>();
 
 function cooldownKey(providerName: string, keyId: string): string {
   return `${providerName}\0${keyId}`;
+}
+
+function pruneMinuteSamples(key: string, now: number): MinuteUsageSample[] {
+  const existing = keyMinuteUsage.get(key);
+  if (!existing || existing.length === 0) return [];
+  const cutoff = now - MINUTE_WINDOW_MS;
+  const fresh = existing.filter(entry => entry.at > cutoff);
+  if (fresh.length === 0) {
+    keyMinuteUsage.delete(key);
+    return [];
+  }
+  if (fresh.length !== existing.length) {
+    keyMinuteUsage.set(key, fresh);
+  }
+  return fresh;
+}
+
+/** Record per-key requests and tokens within a 60-second sliding window. */
+export function recordKeyMinuteUsage(
+  providerName: string,
+  keyId: string,
+  tokens: number,
+  now = Date.now(),
+  requests = 1,
+): void {
+  const key = cooldownKey(providerName, keyId);
+  const fresh = pruneMinuteSamples(key, now);
+  fresh.push({
+    at: now,
+    requests: Math.max(0, Math.round(requests)),
+    tokens: Math.max(0, Math.round(tokens)),
+  });
+  keyMinuteUsage.set(key, fresh);
+}
+
+/** Return total requests and tokens recorded for `keyId` in the last 60 seconds. */
+export function getKeyMinuteUsage(
+  providerName: string,
+  keyId: string,
+  now = Date.now(),
+): { requests: number; tokens: number } {
+  const fresh = pruneMinuteSamples(cooldownKey(providerName, keyId), now);
+  let requests = 0;
+  let tokens = 0;
+  for (const sample of fresh) {
+    requests += sample.requests;
+    tokens += sample.tokens;
+  }
+  return { requests, tokens };
 }
 
 export function setKeyCooldown(providerName: string, keyId: string, cooldownUntil: number): void {
@@ -33,17 +91,52 @@ export function sweepExpiredApiKeyCooldowns(now = Date.now()): number {
     keyCooldowns.delete(key);
     removed += 1;
   }
+  for (const key of [...keyMinuteUsage.keys()]) {
+    pruneMinuteSamples(key, now);
+  }
   return removed;
 }
 
-/** Manual key management clears this provider's cooldowns. */
+/** Mark an AI Studio model as congested so traffic circuit-breaks to Antigravity briefly. */
+export function markAiStudioModelCongested(
+  modelId: string,
+  now = Date.now(),
+  durationMs = DEFAULT_CONGESTION_COOLDOWN_MS,
+): void {
+  const key = modelId.trim();
+  if (!key || !Number.isFinite(durationMs) || durationMs <= 0) return;
+  aiStudioCongestedUntil.set(key, now + durationMs);
+}
+
+/** Whether direct AI Studio calls for this model recently congested and are still in cooldown. */
+export function isAiStudioModelCongested(modelId: string, now = Date.now()): boolean {
+  const key = modelId.trim();
+  if (!key) return false;
+  const until = aiStudioCongestedUntil.get(key);
+  if (until === undefined) return false;
+  if (until <= now) {
+    aiStudioCongestedUntil.delete(key);
+    return false;
+  }
+  return true;
+}
+
+/** Manual key management clears this provider's cooldowns and minute-window load state. */
 export function clearKeyCooldowns(providerName?: string): void {
   if (!providerName) {
     keyCooldowns.clear();
+    keyMinuteUsage.clear();
+    aiStudioCongestedUntil.clear();
     return;
+  }
+  if (providerName === "google") {
+    aiStudioCongestedUntil.clear();
   }
   const prefix = `${providerName}\0`;
   for (const key of keyCooldowns.keys()) {
     if (key.startsWith(prefix)) keyCooldowns.delete(key);
+  }
+  for (const key of keyMinuteUsage.keys()) {
+    if (key.startsWith(prefix)) keyMinuteUsage.delete(key);
   }
 }

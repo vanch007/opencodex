@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import { apiKeyAccountLogLabel } from "../../codex/account-label";
 import { getKeyCooldownUntil } from "../../providers/api-key-cooldowns";
+export {
+  canFallbackGoogleToAntigravity,
+  shouldProactivelyFallbackGoogleToAntigravity,
+} from "../../providers/key-failover";
 import { apiKeyPoolEntryId, maskApiKey } from "../../providers/api-keys";
 import type { OcxConfig, OcxUsage } from "../../types";
 import { scanUsageLedgerCooperatively } from "../../usage/ledger-scanner";
@@ -422,6 +426,12 @@ export function syncGoogleApiKeyPool(params: {
     config.providers.google.requestPacing = {
       enabled: true,
       keySelection: "round-robin",
+    };
+    config.providers.google.cacheAffinity = "off";
+    config.providers.google.showThinkingSummary = true;
+    config.providers.google.retryOnReset = {
+      enabled: true,
+      replacements: 2,
     };
   } else if (config.providers.google?.apiKeyPool) {
     delete config.providers.google.apiKeyPool;

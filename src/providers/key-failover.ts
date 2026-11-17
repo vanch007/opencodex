@@ -8,10 +8,21 @@
  *
  * Modelled after src/codex/routing.ts cooldown logic but scoped to plain API-key pools.
  */
-import { isKeyInCooldown, getKeyCooldownUntil, setKeyCooldown } from "./api-key-cooldowns";
+import {
+  getKeyCooldownUntil,
+  getKeyMinuteUsage,
+  isAiStudioModelCongested,
+  isKeyInCooldown,
+  recordKeyMinuteUsage,
+  setKeyCooldown,
+} from "./api-key-cooldowns";
 export {
   clearKeyCooldowns,
   getKeyCooldownUntil,
+  getKeyMinuteUsage,
+  isAiStudioModelCongested,
+  markAiStudioModelCongested,
+  recordKeyMinuteUsage,
   sweepExpiredApiKeyCooldowns,
 } from "./api-key-cooldowns";
 import { affinitySelectionIsCurrent, commitProviderApiKeySelection, providerApiKeySelectionIsCurrent } from "./api-key-selection";
@@ -20,6 +31,7 @@ import { providerRequestPacingStatus, REQUEST_PACING_MAX_QUEUE_AGE_MS, RequestPa
 import { isCanonicalMistralChat } from "./mistral-transport";
 import type { ProviderApiKeySelection } from "../types/provider";
 import { routedProviderConfig } from "./routed-config";
+import { peekAuthStore } from "../oauth/store";
 import { getProviderRegistryEntry } from "./registry";
 import { isCanonicalCommandCodeBaseUrl, normalizedBaseUrl } from "./quota/vendor-probes-key";
 import type { OcxConfig, OcxProviderConfig, RateLimitRetryPolicy, ResetReplayPolicy, TransientRetryPolicy } from "../types";
@@ -77,6 +89,7 @@ interface QuotaResetReadOptions {
   now?: number;
   signal?: AbortSignal;
   timeoutMs?: number;
+  estimatedInputTokens?: number;
 }
 
 function rebuiltResponse(response: Response, body: ReadableStream<Uint8Array>): Response {
@@ -107,7 +120,7 @@ function replayOnlyResponse(response: Response, chunks: readonly Uint8Array[]): 
 export async function readQuotaResetAt(
   response: Response,
   nowOrOptions: number | QuotaResetReadOptions = {},
-): Promise<{ at: number | undefined; response: Response }> {
+): Promise<{ at: number | undefined; response: Response; nonRetryablePool429?: boolean }> {
   if (!response.body) return { at: undefined, response };
   const options = typeof nowOrOptions === "number" ? { now: nowOrOptions } : nowOrOptions;
   const now = options.now ?? Date.now();
@@ -191,7 +204,11 @@ export async function readQuotaResetAt(
       },
     });
     transferred = true;
-    return { at: parseQuotaResetAt(text, now), response: rebuiltResponse(response, rest) };
+    return {
+      at: parseQuotaResetAt(text, now),
+      response: rebuiltResponse(response, rest),
+      nonRetryablePool429: isGoogleNonRetryablePool429(text, options.estimatedInputTokens),
+    };
   } catch (error) {
     const clientAborted = options.signal?.aborted === true;
     void reader.cancel(error).catch(() => {}).finally(() => {
@@ -261,16 +278,101 @@ function nextPacificMidnightMs(now = Date.now()): number {
   return Math.min(resetAt, now + MAX_QUOTA_COOLDOWN_MS);
 }
 
-function parseGoogleQuotaResetMs(error: unknown, now: number): number | undefined {
+interface GoogleErrorFields {
+  status: unknown;
+  code: unknown;
+  message: string;
+  details: unknown[];
+}
+
+function readGoogleErrorFields(error: unknown): GoogleErrorFields | undefined {
   if (!error || typeof error !== "object") return undefined;
   const status = (error as { status?: unknown }).status;
   const code = (error as { code?: unknown }).code;
-  const message = typeof (error as { message?: unknown }).message === "string" ? (error as { message: string }).message : "";
-  const details = Array.isArray((error as { details?: unknown }).details) ? (error as { details: unknown[] }).details : [];
+  const message = typeof (error as { message?: unknown }).message === "string"
+    ? (error as { message: string }).message
+    : "";
+  const details = Array.isArray((error as { details?: unknown }).details)
+    ? (error as { details: unknown[] }).details
+    : [];
+  if (code !== 429 && code !== "429" && status !== "RESOURCE_EXHAUSTED") return undefined;
+  return { status, code, message, details };
+}
 
-  if (code !== 429 && code !== "429" && status !== "RESOURCE_EXHAUSTED") {
+function hasGoogleZeroQuotaLimit(fields: GoogleErrorFields): boolean {
+  if (/\blimit:\s*0\b/i.test(fields.message)) return true;
+  for (const item of fields.details) {
+    if (!item || typeof item !== "object") continue;
+    const violations = (item as { violations?: unknown }).violations;
+    if (!Array.isArray(violations)) continue;
+    for (const v of violations) {
+      if (v && typeof v === "object" && String((v as { quotaValue?: unknown }).quotaValue ?? "") === "0") {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * True when a Google 429 reflects a condition shared across all Free Tier keys for this request
+ * (model has `limit: 0` entitlement refusal, or single request exceeds the 250k Free Tier TPM limit),
+ * making key rotation futile and risky for healthy key cooldowns.
+ */
+export function isGoogleNonRetryablePool429(
+  body: string | null | undefined,
+  estimatedInputTokens?: number,
+): boolean {
+  const errorObj = parseErrorObjectFromBody(body);
+  const fields = readGoogleErrorFields(errorObj);
+  if (!fields) return false;
+  if (hasGoogleZeroQuotaLimit(fields)) return true;
+  if (estimatedInputTokens === undefined || estimatedInputTokens <= 230_000) return false;
+  let isFreeTierTpm250k = /limit:\s*250000\b/i.test(fields.message)
+    && /input_token_count|tokens\s+per\s+minute/i.test(fields.message);
+  if (!isFreeTierTpm250k) {
+    for (const item of fields.details) {
+      if (!item || typeof item !== "object") continue;
+      const violations = (item as { violations?: unknown }).violations;
+      if (!Array.isArray(violations)) continue;
+      for (const v of violations) {
+        if (!v || typeof v !== "object") continue;
+        const quotaId = String((v as { quotaId?: unknown }).quotaId ?? "");
+        const quotaValue = String((v as { quotaValue?: unknown }).quotaValue ?? "");
+        if (/GenerateContentInputTokensPerModelPerMinute-FreeTier/i.test(quotaId)
+          || (/InputTokensPerModelPerMinute/i.test(quotaId) && quotaValue === "250000")) {
+          isFreeTierTpm250k = true;
+          break;
+        }
+      }
+      if (isFreeTierTpm250k) break;
+    }
+  }
+  return isFreeTierTpm250k;
+}
+
+function parseErrorObjectFromBody(body: string | null | undefined): unknown {
+  const text = body?.slice(0, QUOTA_RESET_SCAN_BYTES);
+  if (!text) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
     return undefined;
   }
+  if (!parsed || typeof parsed !== "object") return undefined;
+  const error = (parsed as { error?: unknown }).error;
+  return error && typeof error === "object" ? error : undefined;
+}
+
+function parseGoogleQuotaResetMs(error: unknown, now: number): number | undefined {
+  const fields = readGoogleErrorFields(error);
+  if (!fields) return undefined;
+  const { message, details } = fields;
+
+  // Model entitlement refusal on Free Tier (limit: 0) carries a 20h+ RetryInfo delay; never park
+  // a key across all Google models for an unentitled model such as gemini-4-argon on Free Tier.
+  if (hasGoogleZeroQuotaLimit(fields)) return undefined;
 
   // 1. Explicit retryDelay in RetryInfo
   for (const item of details) {
@@ -324,16 +426,7 @@ function parseGoogleQuotaResetMs(error: unknown, now: number): number | undefine
 }
 
 export function parseQuotaResetAt(body: string | null | undefined, now = Date.now()): number | undefined {
-  const text = body?.slice(0, QUOTA_RESET_SCAN_BYTES);
-  if (!text) return undefined;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return undefined;
-  }
-  if (!parsed || typeof parsed !== "object") return undefined;
-  const error = (parsed as { error?: unknown }).error;
+  const error = parseErrorObjectFromBody(body);
   if (!error || typeof error !== "object") return undefined;
 
   // Google AI Studio / Generative Language API 429 quota exhaustion & daily limits
@@ -765,18 +858,35 @@ export function selectProactiveApiKeyTransport(
   return applyRotatedTransport(providerName, routedProvider, committed, promptCacheKey);
 }
 
+const DISTRIBUTED_KEY_MINUTE_TOKEN_SOFT_CAP = 180_000;
+const DISTRIBUTED_KEY_MINUTE_REQUEST_SOFT_CAP = 10;
 const dispatchKeyCursor = new Map<string, string>();
 function allocateDistributedKey(providerName: string, provider: OcxProviderConfig, now: number): OcxProviderConfig {
   const pool = (provider.apiKeyPool ?? []).filter(entry => !entry.disabled).filter((entry, index, all) => all.findIndex(other => other.key === entry.key) === index);
   if (pool.length === 0) throw new ProviderApiKeyPausedError();
   const previous = dispatchKeyCursor.get(providerName);
   const start = pool.findIndex(entry => entry.id === previous);
+  const eligible: Array<{ entry: ApiKeyPoolEntry; usage: { requests: number; tokens: number } }> = [];
   for (let offset = 1; offset <= pool.length; offset++) {
     const entry = pool[(start + offset) % pool.length]!;
     if (isKeyInCooldown(providerName, entry.id, now)) continue;
-    dispatchKeyCursor.set(providerName, entry.id);
-    return { ...provider, apiKey: entry.key, _apiKeyAttempt: {
-      entryId: entry.id, reference: entry.key, revision: provider.apiKeySelectionRevision, distributed: true,
+    eligible.push({ entry, usage: getKeyMinuteUsage(providerName, entry.id, now) });
+  }
+  if (eligible.length > 0) {
+    // Prefer round-robin keys under the soft per-minute cap to preserve TPM headroom; otherwise
+    // fall back to the eligible key with the lowest recent minute token load.
+    let picked = eligible.find(candidate =>
+      candidate.usage.tokens < DISTRIBUTED_KEY_MINUTE_TOKEN_SOFT_CAP
+      && candidate.usage.requests < DISTRIBUTED_KEY_MINUTE_REQUEST_SOFT_CAP);
+    if (!picked) {
+      picked = eligible.reduce((best, candidate) =>
+        candidate.usage.tokens < best.usage.tokens ? candidate : best);
+    }
+    const chosen = picked.entry;
+    dispatchKeyCursor.set(providerName, chosen.id);
+    recordKeyMinuteUsage(providerName, chosen.id, 1000, now);
+    return { ...provider, apiKey: chosen.key, _apiKeyAttempt: {
+      entryId: chosen.id, reference: chosen.key, revision: provider.apiKeySelectionRevision, distributed: true,
     } };
   }
   const next = pool.length ? Math.min(...pool.map(entry => getKeyCooldownUntil(providerName, entry.id, now) ?? now + 1000)) : now + 1000;
@@ -914,18 +1024,28 @@ export function rateLimitRetryDelayMs(
  * rebuilds from this committed row, reapplies registry metadata, and retains only explicit
  * runtime transport state (`fetch` and generated OpenCode session affinity).
  */
+const TRANSIENT_5XX_KEY_COOLDOWN_MS = 15_000;
+type KeyFailureStatus = 401 | 429 | 502 | 503 | 504 | "billing";
+
 /** Record a request-local key failure without selecting or sending a replacement. */
 export function recordDistributedKeyFailure(
   config: OcxConfig, providerName: string, selection: ProviderApiKeySelection | undefined,
-  status: 401 | 429 | "billing", now = Date.now(), retryAfter?: string | null, quotaResetAt?: number,
+  status: KeyFailureStatus, now = Date.now(), retryAfter?: string | null, quotaResetAt?: number,
 ): boolean {
   const provider = config.providers[providerName];
   if (!selection?.distributed || !provider || provider.authMode === "oauth" || provider.authMode === "forward") return false;
   if (selection.cacheAffinity && (!cacheAffinityApplies(provider) || !affinitySelectionIsCurrent(providerName, provider, selection))) return false;
   const failed = provider.apiKeyPool?.find(entry => entry.id === selection.entryId && entry.key === selection.reference);
   if (!failed || failed.disabled || (!selection.cacheAffinity && provider.apiKeySelectionRevision !== selection.revision)) return false;
-  const delay = status === "billing" ? ANTHROPIC_BILLING_COOLDOWN_MS : status === 401 ? MAX_COOLDOWN_MS : quotaResetAt !== undefined
-    ? Math.max(1, quotaResetAt - now) : parseRetryAfterMs(retryAfter, now) ?? DEFAULT_COOLDOWN_MS;
+  const delay = status === "billing"
+    ? ANTHROPIC_BILLING_COOLDOWN_MS
+    : status === 401
+      ? MAX_COOLDOWN_MS
+      : quotaResetAt !== undefined
+        ? Math.max(1, quotaResetAt - now)
+        : status >= 500
+          ? TRANSIENT_5XX_KEY_COOLDOWN_MS
+          : parseRetryAfterMs(retryAfter, now) ?? DEFAULT_COOLDOWN_MS;
   for (const entry of provider.apiKeyPool ?? []) if (entry.key === failed.key) {
     setKeyCooldown(providerName, entry.id, now + delay);
   }
@@ -936,7 +1056,7 @@ export function recordDistributedKeyFailure(
 function rotateKeyAfterFailure(
   config: OcxConfig,
   providerName: string,
-  failureStatus: 401 | 429 | "billing",
+  failureStatus: KeyFailureStatus,
   retryAfterHeader: string | null | undefined,
   now = Date.now(),
   attemptedKey?: string,
@@ -1024,7 +1144,9 @@ function rotateKeyAfterFailure(
       // actually returns (#4024).
       : quotaResetAt !== undefined
         ? Math.max(quotaResetAt - now, 1)
-        : parseRetryAfterMs(retryAfterHeader, now) ?? DEFAULT_COOLDOWN_MS;
+        : failureStatus >= 500
+          ? TRANSIENT_5XX_KEY_COOLDOWN_MS
+          : parseRetryAfterMs(retryAfterHeader, now) ?? DEFAULT_COOLDOWN_MS;
     setKeyCooldown(providerName, outcome.value.failedId, now + cooldownMs);
     sweepExpiredOnWrite(now);
   }
@@ -1044,7 +1166,7 @@ function rotateKeyAfterFailure(
   return structuredClone(committed);
 }
 
-function failureLabel(failureStatus: 401 | 429 | "billing"): string {
+function failureLabel(failureStatus: KeyFailureStatus): string {
   return failureStatus === "billing" ? "credit-balance refusal" : String(failureStatus);
 }
 
@@ -1126,6 +1248,32 @@ export function rotateProviderTransportOn401(
   return applyRotatedTransport(providerName, routedProvider, rotated, options.promptCacheKey);
 }
 
+/** Transient 5xx counterpart of `rotateProviderTransportOn429` with a short default cooldown. */
+export function rotateProviderTransportOn5xx(
+  config: OcxConfig,
+  providerName: string,
+  routedProvider: OcxProviderTransport,
+  options: Omit<RotateProviderTransportOptions, "retryAfter" | "quotaResetAt"> & {
+    status?: 502 | 503 | 504;
+    cooldownMs?: number;
+  } = {},
+): OcxProviderTransport | null {
+  const now = options.now ?? Date.now();
+  const cooldownMs = options.cooldownMs ?? TRANSIENT_5XX_KEY_COOLDOWN_MS;
+  const rotated = rotateKeyAfterFailure(
+    config,
+    providerName,
+    options.status ?? 503,
+    null,
+    now,
+    options.attemptedKey,
+    options.attemptedSelection ?? routedProvider._apiKeyAttempt,
+    now + cooldownMs,
+  );
+  if (!rotated) return null;
+  return applyRotatedTransport(providerName, routedProvider, rotated, options.promptCacheKey);
+}
+
 /** Exact Anthropic billing refusal: cool the key for ANTHROPIC_BILLING_COOLDOWN_MS. */
 export function rotateProviderTransportOnAnthropicBilling(
   config: OcxConfig,
@@ -1170,4 +1318,67 @@ function applyRotatedTransport(
       : {}),
   };
   return resolveProviderTransport(providerName, retryProvider, promptCacheKey);
+}
+
+const ANTIGRAVITY_FALLBACK_MODEL_RE = /^gemini-(?:4-(?:argon|hydrogen|carbon)|3\.[15678])/;
+const FREE_TIER_ZERO_QUOTA_MODELS = new Set(["gemini-4-argon", "gemini-4-carbon"]);
+const GOOGLE_FREE_TIER_PROACTIVE_TPM_THRESHOLD = 235_000;
+
+/** Approximate input token count from a serialized request context (3.5 bytes/token conservative ratio). */
+export function estimateGoogleInputTokensFromContext(context: unknown): number {
+  if (!context) return 0;
+  try {
+    return Math.ceil(Buffer.byteLength(JSON.stringify(context), "utf8") / 3.5);
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * True when `google-antigravity` is configured with at least one usable OAuth account
+ * and supports the requested Gemini model id.
+ */
+export function canFallbackGoogleToAntigravity(config: OcxConfig, modelId: string): boolean {
+  if (!config.providers?.["google-antigravity"]) return false;
+  if (!ANTIGRAVITY_FALLBACK_MODEL_RE.test(modelId.trim())) return false;
+  try {
+    const store = peekAuthStore()["google-antigravity"];
+    const now = Date.now();
+    return Boolean(store?.accounts?.some(account =>
+      account.paused !== true
+      && account.needsReauth !== true
+      && (account.credential.expires > now
+        ? Boolean(account.credential.access?.trim())
+        : Boolean(account.credential.refresh?.trim())),
+    ));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * True when a request routed to `google` (AI Studio) should proactively move to `google-antigravity`:
+ * - model is unentitled on AI Studio Free Tier (`gemini-4-argon`, `gemini-4-carbon`),
+ * - estimated input exceeds AI Studio Free Tier's 250k TPM cap (`>235k` tokens), or
+ * - all enabled AI Studio pool keys are currently in cooldown.
+ */
+export function shouldProactivelyFallbackGoogleToAntigravity(
+  config: OcxConfig,
+  modelId: string,
+  estimatedInputTokens?: number,
+  now = Date.now(),
+): boolean {
+  if (!canFallbackGoogleToAntigravity(config, modelId)) return false;
+  const trimmedModelId = modelId.trim();
+  if (FREE_TIER_ZERO_QUOTA_MODELS.has(trimmedModelId)) return true;
+  if (isAiStudioModelCongested(trimmedModelId, now)) return true;
+  if (estimatedInputTokens !== undefined && estimatedInputTokens > GOOGLE_FREE_TIER_PROACTIVE_TPM_THRESHOLD) {
+    return true;
+  }
+  const pool = config.providers?.google?.apiKeyPool;
+  if (pool && pool.length > 0) {
+    const anyAvailable = pool.some(entry => !entry.disabled && !isKeyInCooldown("google", entry.id, now));
+    if (!anyAvailable) return true;
+  }
+  return false;
 }
