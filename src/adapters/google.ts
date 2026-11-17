@@ -938,9 +938,21 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
   // another merely because the public model id and first prompt happen to match.
   let vertexReplayModel: string | undefined;
   let vertexReplaySession: string | undefined;
+  let aiStudioReplayModel: string | undefined;
+  let aiStudioReplaySession: string | undefined;
   let restoreGoogleToolName = (name: string): string => name;
   let lastInjectedCallIds: string[] = [];
   let lastReasoningReplayScope: OcxParsedRequest["_reasoningReplayScope"];
+
+  const activeReplayScope = (): { model?: string; session?: string } => {
+    if (provider.googleMode === "cloud-code-assist") {
+      return { model: antigravityModel, session: antigravitySession };
+    }
+    if (provider.googleMode === "vertex") {
+      return { model: vertexReplayModel, session: vertexReplaySession };
+    }
+    return { model: aiStudioReplayModel, session: aiStudioReplaySession };
+  };
 
   // Conservative batch invalidation: upstream Gemini/Antigravity errors (e.g.
   // "Function call is missing a thought_signature in functionCall parts") do not specify which
@@ -958,17 +970,11 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
   // normalized Vertex/Antigravity error text keeps only Google's message, not its status enum,
   // so a 400 such as "bad model" would otherwise leave the poisoned session entry in place (#8054).
   function handleSignatureRejection(errorMessage?: string, httpStatus?: number) {
-    const replayModel = provider.googleMode === "cloud-code-assist" ? antigravityModel : vertexReplayModel;
-    const replaySession = provider.googleMode === "cloud-code-assist" ? antigravitySession : vertexReplaySession;
+    const { model: replayModel, session: replaySession } = activeReplayScope();
     const text = errorMessage ?? "";
     const isInvalidArgument = httpStatus === 400 || /invalid_argument|invalid argument/i.test(text);
     const isSignatureError = /signature|thought_signature|thoughtSignature/i.test(text);
-    // The in-memory Antigravity replay cache only exists for CCA/Vertex, so clearing it stays
-    // scoped to those modes (replayModel/replaySession are undefined elsewhere anyway).
-    if (
-      (provider.googleMode === "cloud-code-assist" || provider.googleMode === "vertex")
-      && replayModel && replaySession && (isInvalidArgument || isSignatureError)
-    ) {
+    if (replayModel && replaySession && (isInvalidArgument || isSignatureError)) {
       clearAntigravityReplay(replayModel, replaySession);
     }
     // The DURABLE store is not mode-scoped: signatures are remembered through
@@ -1340,7 +1346,13 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       // Gemini 3 refuses the turn without one. The same Gemini-only sentinel CCA and Vertex
       // apply; a real signature carried by history always wins.
       if (Array.isArray((compiled.body as { contents?: unknown[] }).contents)) {
-        applyAntigravityThoughtSignatureFallback(routedModelId, (compiled.body as { contents: unknown[] }).contents);
+        const compiledContents = (compiled.body as { contents: unknown[] }).contents;
+        if (!goEndpoint && !zenEndpoint) {
+          aiStudioReplayModel = `aistudio:${routedModelId}`;
+          aiStudioReplaySession = vertexReplaySessionId(parsed);
+          applyAntigravityReplay(aiStudioReplayModel, aiStudioReplaySession, compiledContents);
+        }
+        applyAntigravityThoughtSignatureFallback(routedModelId, compiledContents);
       }
       return { url, method: "POST", headers, body: JSON.stringify(compiled.body), outboundModelId: routedModelId };
     },
@@ -1512,12 +1524,10 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             return "terminate";
           }
         }
-        // Record Gemini thought signatures for the next stateless tool-result turn. Vertex and
-        // Antigravity use separate model namespaces so opaque provider state cannot cross routes.
-        const replayModel = provider.googleMode === "cloud-code-assist" ? antigravityModel : vertexReplayModel;
-        const replaySession = provider.googleMode === "cloud-code-assist" ? antigravitySession : vertexReplaySession;
-        if ((provider.googleMode === "cloud-code-assist" || provider.googleMode === "vertex")
-          && parts && replayModel && replaySession) {
+        // Record Gemini thought signatures for the next stateless tool-result turn. Direct AI Studio,
+        // Vertex, and Antigravity use separate model namespaces so opaque state cannot cross routes.
+        const { model: replayModel, session: replaySession } = activeReplayScope();
+        if (parts && replayModel && replaySession) {
           // Observation may scan the whole frame, so use it only for replay-cache side effects.
           // The source-order loop below exclusively owns stream carry and cannot pair backwards.
           observeAntigravityReplay(
@@ -1816,10 +1826,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         if (invalidFunctionCall) return finish([invalidGoogleFunctionCallEvent(invalidFunctionCall)]);
         // Non-streaming Google-family response: observe thought signatures for the next turn,
         // using the same transport-scoped namespace as the streaming path.
-        const replayModel = provider.googleMode === "cloud-code-assist" ? antigravityModel : vertexReplayModel;
-        const replaySession = provider.googleMode === "cloud-code-assist" ? antigravitySession : vertexReplaySession;
-        if ((provider.googleMode === "cloud-code-assist" || provider.googleMode === "vertex")
-          && replayModel && replaySession) {
+        const { model: replayModel, session: replaySession } = activeReplayScope();
+        if (replayModel && replaySession) {
           observeAntigravityReplay(replayModel, replaySession, parts as unknown[]);
         }
         let pendingThoughtSig: string | undefined;
