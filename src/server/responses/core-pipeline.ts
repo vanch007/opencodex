@@ -27,6 +27,13 @@ import { formatErrorResponse } from "../../bridge";
 import { InvalidRetainedCompactionSummary, prepareCompactionRetention } from "./compaction-retention";
 import { responsesHasInstructionImage } from "../../adapters/claude-cli/instruction-images";
 import { markResponseNonReplayable } from "../../lib/upstream-retry";
+import { routeConcreteModel } from "../../router";
+import {
+  canFallbackGoogleToAntigravity,
+  estimateGoogleInputTokensFromContext,
+  markAiStudioModelCongested,
+  shouldProactivelyFallbackGoogleToAntigravity,
+} from "../../providers/key-failover";
 
 /** Compose request phases while retaining the original admission-finally ownership. */
 export async function handleResponsesInner(
@@ -46,6 +53,24 @@ export async function handleResponsesInner(
   try {
     const requestState = await prepareResponsesRequest(requestContext, admissionState, requestDispatchers);
     if (requestState instanceof Response) return requestState;
+    const rebindRouteToAntigravity = (): boolean => {
+      try {
+        const nextRoute = routeConcreteModel(config, `google-antigravity/${requestState.route.modelId}`);
+        if (nextRoute.providerName !== "google-antigravity") return false;
+        requestState.route = nextRoute;
+        logCtx.provider = nextRoute.providerName;
+        logCtx.accountLogLabel = undefined;
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    if (requestState.route.providerName === "google") {
+      const estimatedTokens = estimateGoogleInputTokensFromContext(requestState.parsed.context);
+      if (shouldProactivelyFallbackGoogleToAntigravity(config, requestState.route.modelId, estimatedTokens)) {
+        rebindRouteToAntigravity();
+      }
+    }
     const transportState = await prepareResponsesTransport(requestContext, admissionState, requestState);
     if (transportState instanceof Response) return markProxyError(transportState);
     if (transportState.runTurnAdapter.name === "claude-cli") {
@@ -73,8 +98,9 @@ export async function handleResponsesInner(
         requestState.route.staticPolicy.model.contextWindow ?? requestState.route.staticPolicy.model.maxInputTokens,
         options.translatorBudget, options.abortSignal ?? req.signal);
     }
-    const execute = async (): Promise<Response> => {
-      const sidecarState = await prepareResponsesSidecarAuth(requestContext, requestState, transportState);
+    type PreparedTransport = Exclude<Awaited<ReturnType<typeof prepareResponsesTransport>>, Response>;
+    const execute = async (activeTransport: PreparedTransport): Promise<Response> => {
+      const sidecarState = await prepareResponsesSidecarAuth(requestContext, requestState, activeTransport);
       if (sidecarState instanceof Response) return markProxyError(sidecarState);
       const responseEffects = createResponsesEffects(
         requestContext,
@@ -84,12 +110,12 @@ export async function handleResponsesInner(
       );
       const sendBudgetState = createResponsesSendBudget(requestContext);
       if (sendBudgetState instanceof Response) return markProxyError(sendBudgetState);
-      if ("passthrough" in transportState.adapter && transportState.adapter.passthrough && !sidecarState.routedCompaction) {
+      if ("passthrough" in activeTransport.adapter && activeTransport.adapter.passthrough && !sidecarState.routedCompaction) {
         const passthroughResult = await executePassthroughResponse(
           requestContext,
           admissionState,
           requestState,
-          transportState,
+          activeTransport,
           sidecarState,
           responseEffects,
           sendBudgetState,
@@ -101,18 +127,18 @@ export async function handleResponsesInner(
       const sidecarPlans = await executeResponsesSidecars(
         requestContext,
         requestState,
-        transportState,
+        activeTransport,
         sidecarState,
         responseEffects,
         sendBudgetState,
       );
       if (sidecarPlans instanceof Response) return sidecarPlans;
       const completionPolicy = createResponsesCompletionPolicy(requestContext, sidecarState);
-      if (transportState.adapter.runTurn) return await executeResponsesRunTurn(
+      if (activeTransport.adapter.runTurn) return await executeResponsesRunTurn(
         requestContext,
         admissionState,
         requestState,
-        transportState,
+        activeTransport,
         sidecarState,
         responseEffects,
         sendBudgetState,
@@ -122,7 +148,7 @@ export async function handleResponsesInner(
         requestContext,
         admissionState,
         requestState,
-        transportState,
+        activeTransport,
         responseEffects,
         sendBudgetState,
       );
@@ -130,7 +156,7 @@ export async function handleResponsesInner(
       const continuationState = createAdapterContinuations(
         requestContext,
         requestState,
-        transportState,
+        activeTransport,
         sidecarState,
         sendBudgetState,
         adapterExchange,
@@ -138,7 +164,7 @@ export async function handleResponsesInner(
       return await deliverAdapterResponse(
         requestContext,
         requestState,
-        transportState,
+        activeTransport,
         sidecarState,
         responseEffects,
         completionPolicy,
@@ -146,7 +172,21 @@ export async function handleResponsesInner(
         continuationState,
       );
     };
-    const response = await execute();
+    let response = await execute(transportState);
+    if (
+      requestState.route.providerName === "google"
+      && [429, 500, 502, 503, 504].includes(response.status)
+      && !(options.abortSignal ?? req.signal).aborted
+      && canFallbackGoogleToAntigravity(config, requestState.route.modelId)
+      && rebindRouteToAntigravity()
+    ) {
+      try { void response.body?.cancel().catch(() => {}); } catch { /* ignore */ }
+      markAiStudioModelCongested(requestState.route.modelId);
+      const fallbackTransport = await prepareResponsesTransport(requestContext, admissionState, requestState);
+      if (!(fallbackTransport instanceof Response)) {
+        response = await execute(fallbackTransport);
+      }
+    }
     return retention ? retention.deliver(response) : response;
   } catch (error) {
     retention?.dispose();

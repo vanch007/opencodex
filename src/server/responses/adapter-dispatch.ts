@@ -48,7 +48,9 @@ import { isAnthropicBillingKeyPool, rotateAnthropicBillingKeyOnResponse } from "
 import {
   transientRetryPolicyFor, resetReplayPolicyFor, rateLimitRetryPolicyFor,
   hasKeyPoolFailover, rotateProviderTransportOn401, rateLimitRetryDelayMs,
-  readQuotaResetAt, rotateProviderTransportOn429,
+  readQuotaResetAt, rotateProviderTransportOn429, rotateProviderTransportOn5xx,
+  recordKeyMinuteUsage, canFallbackGoogleToAntigravity,
+  estimateGoogleInputTokensFromContext,
 } from "../../providers/key-failover";
 import {
   fetchWithTransientRetry,
@@ -260,7 +262,21 @@ export async function prepareAdapterExchange(
   const localUpstream = isLocalUpstream(route.provider.baseUrl);
   // Header arrival and body silence are separate clocks (structure/transports/timeouts.md).
   const connectMs = resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream });
-  const sendConnectMs = () => resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: isLocalUpstream(route.provider.baseUrl) });
+  // When Antigravity can rescue a stalled AI Studio Free Tier call, cap the initial header wait
+  // to 12s (even when a higher global connectTimeoutMs is configured) instead of stalling.
+  const sendConnectMs = () => {
+    const baseMs = resolveConnectTimeoutMs(config.connectTimeoutMs, {
+      localUpstream: isLocalUpstream(route.provider.baseUrl),
+    });
+    if (
+      route.providerName === "google"
+      && !isLocalUpstream(route.provider.baseUrl)
+      && canFallbackGoogleToAntigravity(config, route.modelId)
+    ) {
+      return baseMs > 0 ? Math.min(baseMs, 12_000) : 12_000;
+    }
+    return baseMs;
+  };
   transportState.activeAdapter = transportState.adapter;
   const antigravityPoolActivated = route.providerName === "google-antigravity"
     && isGenericOAuthFailoverEnabled(config, route.providerName);
@@ -272,6 +288,7 @@ export async function prepareAdapterExchange(
   // reuse is safe, and releaseBodyObservation is idempotent per build.
   let initialRequest: AdapterRequest | undefined;
   let inputTokenEstimate: number | undefined;
+  let googleEstimatedInputTokens: number | undefined;
   // An adapter may know the turn needs no inference at all — Kiro's replayed history ending in a
   // delivered final answer. Answer it locally: no build (so no token estimate), no send (so
   // sendCount stays 0), and crucially no empty-completion guard, which treats an outputless
@@ -342,6 +359,22 @@ export async function prepareAdapterExchange(
       ? initialRequest.usageLog.inputTokens
       : undefined;
     if (inputTokenEstimate !== undefined) logCtx.usageLogInputTokens = inputTokenEstimate;
+    googleEstimatedInputTokens = inputTokenEstimate ?? (
+      route.provider.adapter === "google"
+        ? (typeof initialRequest.body === "string"
+            ? Math.ceil(Buffer.byteLength(initialRequest.body, "utf8") / 3.5)
+            : estimateGoogleInputTokensFromContext(parsed.context))
+        : undefined
+    );
+    if (googleEstimatedInputTokens !== undefined && googleEstimatedInputTokens > 1000 && route.provider._apiKeyAttempt?.entryId) {
+      recordKeyMinuteUsage(
+        route.providerName,
+        route.provider._apiKeyAttempt.entryId,
+        googleEstimatedInputTokens - 1000,
+        Date.now(),
+        0,
+      );
+    }
   } catch (err) {
     // A throwing buildRequest never returned a request; if a post-build step threw, release
     // the serialized-body observation (idempotent) so the translator budget is not leaked.
@@ -480,7 +513,7 @@ export async function prepareAdapterExchange(
         ? transientSendCapFor(transientPolicy?.attempts,
           (options.comboAttempt || compactPrepaid) ? 0 : sendBudgetState.sendsUsed)
         : 1;
-      const fetchWithRetryPolicy = (route.provider.adapter === "google" || transientPolicy)
+      const fetchWithRetryPolicy = ((route.provider.adapter === "google" && !hasKeyPoolFailover(route.provider)) || transientPolicy)
         ? fetchWithTransientRetry
         : fetchWithResetRetry;
       const initialReporter = transientSendReporter(compactPrepaid ?? options.comboDispatchPermit);
@@ -615,6 +648,8 @@ export async function prepareAdapterExchange(
   // `attempts` same-key replays in total (bounded per request).
   const rateLimitPolicy = rateLimitRetryPolicyFor(route.provider);
   let rateLimitRetries = 0;
+  let googleKey429Rotations = 0;
+  let googleKey5xxRotations = 0;
   // Shared with the terminal-guard continuation below: an image-tier reduction that let the
   // main request clear a 413 must not be forgotten on the very next continuation build.
   // Recovery helpers also serve initial HTTP-200 adapter errors during delivery.
@@ -714,6 +749,22 @@ export async function prepareAdapterExchange(
         ? retryRequest.usageLog.inputTokens
         : undefined;
       if (retryEstimate !== undefined) logCtx.usageLogInputTokens = retryEstimate;
+      const retryMinuteTokens = retryEstimate ?? (
+        route.provider.adapter === "google"
+          ? (typeof retryRequest.body === "string"
+              ? Math.ceil(Buffer.byteLength(retryRequest.body, "utf8") / 3.5)
+              : googleEstimatedInputTokens)
+          : undefined
+      );
+      if (recovery === "key-429" && retryMinuteTokens !== undefined && retryMinuteTokens > 1000 && route.provider._apiKeyAttempt?.entryId) {
+        recordKeyMinuteUsage(
+          route.providerName,
+          route.provider._apiKeyAttempt.entryId,
+          retryMinuteTokens - 1000,
+          Date.now(),
+          0,
+        );
+      }
       if (!transportState.deferPhysicalAttribution) {
         logCtx.providerAdapter = transportState.activeAdapter.name;
         sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
@@ -765,7 +816,7 @@ export async function prepareAdapterExchange(
           // selection, and pass what is LEFT of the request-scoped budget rather than a
           // fresh one, so a recovery loop cannot multiply total upstream sends.
           const refetchTransientPolicy = transientRetryPolicyFor(route.provider);
-          const refetchWithPolicy = (route.provider.adapter === "google" || refetchTransientPolicy)
+          const refetchWithPolicy = ((route.provider.adapter === "google" && !hasKeyPoolFailover(route.provider)) || refetchTransientPolicy)
             ? fetchWithTransientRetry
             : fetchWithResetRetry;
           const helperCountsSends = genericRefetchCountsSends();
@@ -1308,54 +1359,18 @@ export async function prepareAdapterExchange(
             && [400, 402].includes(upstreamResponse.status))) continue recovery;
      }
 
-      // Multi-key 429 failover: rotate to the next pool key (cooldown-aware) and retry the
-      // SAME request once per remaining key. OAuth/forward providers and single-key pools
-      // return null immediately, so this stays a no-op for them (src/providers/key-failover.ts).
-      while (upstreamResponse.status === 429 && hasKeyPoolFailover(route.provider)) {
-        // A quota exhaustion is dated in the BODY, not in `Retry-After` — OpenRouter
-        // sends no header for it (#4024). Read a bounded prefix before the socket is
-        // released below; a failed or slow read just leaves the header path in charge.
-        // Peeks a bounded prefix and hands back a Response still carrying the whole
-        // body, so the cancel below still releases the socket.
-        let peeked: Awaited<ReturnType<typeof readQuotaResetAt>>;
-        try {
-          peeked = await readQuotaResetAt(upstreamResponse, { signal: options.abortSignal });
-        } catch {
-          cleanupUpstreamAbort();
-          upstream.abort();
-          return clientCancelledResponse();
-        }
-        if (options.abortSignal?.aborted) {
-          cleanupUpstreamAbort();
-          upstream.abort();
-          return clientCancelledResponse();
-        }
-        upstreamResponse = peeked.response;
-        const quotaResetAt = peeked.at;
-        const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
-          retryAfter: upstreamResponse.headers.get("retry-after"),
-          now: Date.now(),
-          attemptedKey: route.provider.apiKey,
-          promptCacheKey: parsed.options.promptCacheKey,
-          quotaResetAt,
-        });
-        if (!rotated) break;
-        if (billingRecoveryActive && (options.abortSignal?.aborted || upstream.signal.aborted)) {
-          cleanupUpstreamAbort(); upstream.abort(); return clientCancelledResponse();
-        }
-        const billingHop = (billingPoolRequest || billingRecoveryActive)
-          ? reserveCredentialHop("auth-recovery", `${route.providerName}|${route.modelId}|key-429`,
-            transportState.activeAdapter.fetchResponse === undefined)
-          : undefined;
-        if (billingHop && !billingHop.allowed) break;
-        const failedResponse = billingPoolRequest || billingRecoveryActive ? await retainFailureResponse() : undefined;
+      const dispatchRotatedPoolKey = async (
+        rotated: NonNullable<ReturnType<typeof rotateProviderTransportOn429>>,
+        failedResponse: Response | undefined,
+        billingHop: ReturnType<typeof reserveCredentialHop> | undefined,
+      ): Promise<{ action: "ok" | "break" | "continue" } | { action: "return"; response: Response }> => {
         try {
           // Release the failed response's socket before retrying; unread bodies otherwise linger
           // until runtime cleanup (one per rotated key under a rate-limit storm).
           if (!failedResponse) try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
           route.provider = rotated;
           const selectionFailure = await resolveRotatedCopilotSelection();
-          if (selectionFailure) return selectionFailure;
+          if (selectionFailure) return { action: "return", response: selectionFailure };
           invalidateSameTargetRequest();
           transportState.activeAdapter = resolveSelectionAdapter(
             resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
@@ -1371,8 +1386,8 @@ export async function prepareAdapterExchange(
           const result = await rebuildAndRefetch("key-429",
             billingHop ? () => { if (billingHop.permit?.use() === false) throw new SendBudgetExhaustedError(); } : undefined, failedResponse);
           if ("failed" in result) {
-            if (result.failed !== failedResponse) return result.failed;
-            break;
+            if (result.failed !== failedResponse) return { action: "return", response: result.failed };
+            return { action: "break" };
           }
           if (failedResponse) {
             try { void failedResponse.body?.cancel().catch(() => {}); } catch { /* closed */ }
@@ -1382,10 +1397,93 @@ export async function prepareAdapterExchange(
           // nothing, which outlives the request.
           if (isNonReplayableResponse(upstreamResponse)
             || (billingRecoveryActive && upstreamResponse.status === 401)
-            || (route.provider.adapter === "anthropic" && [400, 402].includes(upstreamResponse.status))) continue recovery;
+            || (route.provider.adapter === "anthropic" && [400, 402].includes(upstreamResponse.status))) {
+            return { action: "continue" };
+          }
+          return { action: "ok" };
         } finally {
           if (billingHop) { sendBudgetState.pendingHopPermit = undefined; billingHop.permit?.release(); }
         }
+      };
+
+      // Multi-key 429 failover: rotate to the next pool key (cooldown-aware) and retry the
+      // SAME request once per remaining key. OAuth/forward providers and single-key pools
+      // return null immediately, so this stays a no-op for them (src/providers/key-failover.ts).
+      while (upstreamResponse.status === 429 && hasKeyPoolFailover(route.provider)) {
+        if (route.providerName === "google" && canFallbackGoogleToAntigravity(config, route.modelId) && googleKey429Rotations >= 3) {
+          break;
+        }
+        // A quota exhaustion is dated in the BODY, not in `Retry-After` — OpenRouter
+        // sends no header for it (#4024). Read a bounded prefix before the socket is
+        // released below; a failed or slow read just leaves the header path in charge.
+        // Peeks a bounded prefix and hands back a Response still carrying the whole
+        // body, so the cancel below still releases the socket.
+        let peeked: Awaited<ReturnType<typeof readQuotaResetAt>>;
+        try {
+          peeked = await readQuotaResetAt(upstreamResponse, {
+            signal: options.abortSignal,
+            estimatedInputTokens: googleEstimatedInputTokens,
+          });
+        } catch {
+          cleanupUpstreamAbort();
+          upstream.abort();
+          return clientCancelledResponse();
+        }
+        if (options.abortSignal?.aborted) {
+          cleanupUpstreamAbort();
+          upstream.abort();
+          return clientCancelledResponse();
+        }
+        upstreamResponse = peeked.response;
+        if (peeked.nonRetryablePool429) break;
+        const quotaResetAt = peeked.at;
+        const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
+          retryAfter: upstreamResponse.headers.get("retry-after"),
+          now: Date.now(),
+          attemptedKey: route.provider.apiKey,
+          promptCacheKey: parsed.options.promptCacheKey,
+          quotaResetAt,
+        });
+        if (!rotated) break;
+        googleKey429Rotations += 1;
+        if (billingRecoveryActive && (options.abortSignal?.aborted || upstream.signal.aborted)) {
+          cleanupUpstreamAbort(); upstream.abort(); return clientCancelledResponse();
+        }
+        const billingHop = (billingPoolRequest || billingRecoveryActive)
+          ? reserveCredentialHop("auth-recovery", `${route.providerName}|${route.modelId}|key-429`,
+            transportState.activeAdapter.fetchResponse === undefined)
+          : undefined;
+        if (billingHop && !billingHop.allowed) break;
+        const failedResponse = billingPoolRequest || billingRecoveryActive ? await retainFailureResponse() : undefined;
+        const step = await dispatchRotatedPoolKey(rotated, failedResponse, billingHop);
+        if (step.action === "return") return step.response;
+        if (step.action === "break") break;
+        if (step.action === "continue") continue recovery;
+      }
+
+      // Bounded multi-key 502/503/504 rotation for pooled Google AI Studio keys so a per-key
+      // model overload/503 failure fails over to another healthy pool key cleanly.
+      // Cap at 1 rotation when Antigravity fallback exists so congested models fail over quickly.
+      while (
+        (upstreamResponse.status === 502 || upstreamResponse.status === 503 || upstreamResponse.status === 504)
+        && route.provider.adapter === "google"
+        && hasKeyPoolFailover(route.provider)
+        && googleKey5xxRotations < (
+          route.providerName === "google" && canFallbackGoogleToAntigravity(config, route.modelId) ? 1 : 3
+        )
+      ) {
+        const rotated = rotateProviderTransportOn5xx(config, route.providerName, route.provider, {
+          status: upstreamResponse.status as 502 | 503 | 504,
+          now: Date.now(),
+          attemptedKey: route.provider.apiKey,
+          promptCacheKey: parsed.options.promptCacheKey,
+        });
+        if (!rotated) break;
+        googleKey5xxRotations += 1;
+        const step = await dispatchRotatedPoolKey(rotated, undefined, undefined);
+        if (step.action === "return") return step.response;
+        if (step.action === "break") break;
+        if (step.action === "continue") continue recovery;
       }
 
       // Anthropic OAuth: recover a rate limit or proven account entitlement refusal
