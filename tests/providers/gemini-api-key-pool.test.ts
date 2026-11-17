@@ -1,13 +1,27 @@
 import { describe, expect, test } from "bun:test";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { FREE_PROVIDER_DIRECTORY } from "../../src/providers/free-directory";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   clearKeyCooldowns,
   getKeyCooldownUntil,
+  getKeyMinuteUsage,
+  isGoogleNonRetryablePool429,
   parseQuotaResetAt,
+  recordKeyMinuteUsage,
   rotateProviderTransportOn429,
+  rotateProviderTransportOn5xx,
+  isAiStudioModelCongested,
+  markAiStudioModelCongested,
   selectProactiveApiKeyTransport,
+  shouldProactivelyFallbackGoogleToAntigravity,
 } from "../../src/providers/key-failover";
+import { createGoogleAdapter } from "../../src/adapters/google";
+import { parseRequest } from "../../src/responses/parser";
+import { withTestTranslatorBudget } from "../helpers/translator-budget";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { routedProviderConfig } from "../../src/providers/routed-config";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
@@ -286,6 +300,9 @@ describe("AI Studio local quota & email-merged account grouping", () => {
       "user@gmail.com",
       "icloud@icloud.com",
     ]);
+    expect(cfg.providers.google?.cacheAffinity).toBe("off");
+    expect(cfg.providers.google?.showThinkingSummary).toBe(true);
+    expect(cfg.providers.google?.retryOnReset).toEqual({ enabled: true, replacements: 2 });
 
     // Subsequent Antigravity update must not wipe standalone email key
     syncGoogleApiKeyPool({
@@ -386,5 +403,214 @@ describe("AI Studio local quota & email-merged account grouping", () => {
     expect(inferXaiPlanFromAccessToken(makeJwt({ sub: "u2", tier: 3 }))).toBe("ultra");
     expect(inferXaiPlanFromAccessToken(makeJwt({ sub: "u3", tier: 1 }))).toBe("plus");
     expect(inferXaiPlanFromAccessToken(makeJwt({ sub: "u4" }))).toBeUndefined();
+  });
+});
+
+describe("AI Studio key pool optimization & Antigravity fallback", () => {
+  const now = 1_700_500_000_000;
+
+  function makeOptConfig(): { config: OcxConfig; provider: OcxProviderConfig } {
+    const provider: OcxProviderConfig = {
+      adapter: "google",
+      baseUrl: "https://generativelanguage.googleapis.com",
+      authMode: "key",
+      apiKey: "AIza-opt-1",
+      apiKeyPool: [
+        { id: "opt-1", key: "AIza-opt-1", addedAt: 1 },
+        { id: "opt-2", key: "AIza-opt-2", addedAt: 2 },
+        { id: "opt-3", key: "AIza-opt-3", addedAt: 3 },
+      ],
+      requestPacing: { enabled: true, keySelection: "round-robin" },
+      cacheAffinity: "off",
+      showThinkingSummary: true,
+    };
+    const config = {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "google",
+      providers: { google: provider },
+    } as unknown as OcxConfig;
+    return { config, provider };
+  }
+
+  test("limit: 0 429 does not poison cooldowns and marks non-retryable pool 429", () => {
+    const body = JSON.stringify({
+      error: {
+        code: 429,
+        status: "RESOURCE_EXHAUSTED",
+        message: "Quota exceeded for metric: generate_content_free_tier_input_token_count, limit: 0, model: gemini-4-argon.",
+        details: [{ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "75041s" }],
+      },
+    });
+    expect(parseQuotaResetAt(body, now)).toBeUndefined();
+    expect(isGoogleNonRetryablePool429(body, 5_000)).toBe(true);
+  });
+
+  test("per-minute 250k token limit triggers non-retryable pool 429 on oversized >230k request", () => {
+    const body = JSON.stringify({
+      error: {
+        code: 429,
+        status: "RESOURCE_EXHAUSTED",
+        message: "Quota exceeded for metric: generate_content_free_tier_input_token_count, limit: 250000, model: gemini-4-hydrogen, description: Generate content input tokens per minute limit exceeded.",
+        details: [
+          {
+            "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+            violations: [
+              { quotaId: "GenerateContentInputTokensPerModelPerMinute-FreeTier", quotaValue: "250000" },
+            ],
+          },
+          { "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "36s" },
+        ],
+      },
+    });
+    expect(isGoogleNonRetryablePool429(body, 250_000)).toBe(true);
+    expect(isGoogleNonRetryablePool429(body, 120_000)).toBe(false);
+  });
+
+  test("60s sliding-window minute usage prefers keys with lower recent token load", () => {
+    const { config, provider } = makeOptConfig();
+    clearKeyCooldowns("google");
+    const routed = routedProviderConfig("google", provider);
+
+    recordKeyMinuteUsage("google", "opt-1", 190_000, now);
+    recordKeyMinuteUsage("google", "opt-2", 185_000, now);
+    expect(getKeyMinuteUsage("google", "opt-1", now)).toEqual({ requests: 1, tokens: 190_000 });
+
+    const picked = selectProactiveApiKeyTransport(config, "google", routed, undefined, now);
+    expect(picked?.apiKey).toBe("AIza-opt-3");
+    expect(getKeyMinuteUsage("google", "opt-1", now + 61_000)).toEqual({ requests: 0, tokens: 0 });
+  });
+
+  test("rotateProviderTransportOn5xx cools failed key for 15s and rotates to next healthy key", () => {
+    const { config, provider } = makeOptConfig();
+    clearKeyCooldowns("google");
+    const routed = routedProviderConfig("google", provider);
+
+    const first = selectProactiveApiKeyTransport(config, "google", routed, undefined, now)!;
+    const second = rotateProviderTransportOn5xx(config, "google", first, {
+      status: 503,
+      now,
+      attemptedKey: first.apiKey,
+    });
+    expect(second).not.toBeNull();
+    expect(second?.apiKey).not.toBe(first.apiKey);
+
+    const failedId = first._apiKeyAttempt!.entryId;
+    expect(getKeyCooldownUntil("google", failedId, now)).toBe(now + 15_000);
+  });
+
+  test("cross-key AI Studio thoughtSignature replay preserves signatures across key rotations", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-aistudio-replay-"));
+    const prevHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = home;
+    try {
+      const sig = "CiQAx-aistudio-cross-key-thought-signature-0123456789";
+      const providerKey1: OcxProviderConfig = {
+        adapter: "google",
+        baseUrl: "https://generativelanguage.googleapis.com",
+        authMode: "key",
+        apiKey: "AIza-replay-key-1",
+      };
+      const adapter1 = withTestTranslatorBudget(createGoogleAdapter(providerKey1));
+      const req1 = parseRequest({
+        model: "gemini-4-hydrogen",
+        stream: true,
+        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "check weather" }] }],
+      });
+      await adapter1.buildRequest(req1);
+
+      const ssePayload = `data: ${JSON.stringify({
+        candidates: [{
+          content: {
+            parts: [
+              { thought: true, text: "thinking...", thoughtSignature: sig },
+              { functionCall: { name: "get_weather", args: { city: "NYC" } } },
+            ],
+          },
+          finishReason: "STOP",
+        }],
+      })}\n\n`;
+      const events: unknown[] = [];
+      for await (const ev of adapter1.parseStream(new Response(ssePayload, {
+        headers: { "content-type": "text/event-stream" },
+      }))) {
+        events.push(ev);
+      }
+      expect(events.length).toBeGreaterThan(0);
+
+      // Next turn arrives via a DIFFERENT AI Studio API key in the pool without client extra_content
+      const providerKey2: OcxProviderConfig = {
+        ...providerKey1,
+        apiKey: "AIza-replay-key-2",
+      };
+      const adapter2 = withTestTranslatorBudget(createGoogleAdapter(providerKey2));
+      const req2 = parseRequest({
+        model: "gemini-4-hydrogen",
+        tools: [{ type: "function", name: "get_weather", parameters: { type: "object", properties: { city: { type: "string" } } } }],
+        input: [
+          { type: "message", role: "user", content: [{ type: "input_text", text: "check weather" }] },
+          { type: "function_call", call_id: "call_1", name: "get_weather", arguments: "{\"city\":\"NYC\"}" },
+          { type: "function_call_output", call_id: "call_1", output: "sunny" },
+        ],
+      });
+      const built2 = await adapter2.buildRequest(req2);
+      const wireBody = JSON.parse(String(built2.body)) as { contents: Array<{ role: string; parts: Array<Record<string, unknown>> }> };
+      const modelTurn = wireBody.contents.find(c => c.role === "model");
+      expect(modelTurn?.parts[0]?.thoughtSignature).toBe(sig);
+    } finally {
+      if (prevHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = prevHome;
+      removeTreeWithRetry(home);
+    }
+  });
+
+  test("shouldProactivelyFallbackGoogleToAntigravity detects unentitled models and >235k tokens", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-fallback-test-"));
+    const prevHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = home;
+    try {
+      writeFileSync(join(home, "auth.json"), JSON.stringify({
+        "google-antigravity": {
+          activeAccountId: "ag-pro-1",
+          accounts: [{
+            id: "ag-pro-1",
+            credential: {
+              access: "ya29.test-access",
+              refresh: "1//test-refresh",
+              expires: Date.now() + 3_600_000,
+              projectId: "proj-1",
+              plan: "g1-pro-tier",
+            },
+          }],
+        },
+      }));
+
+      const { config } = makeOptConfig();
+      config.providers["google-antigravity"] = {
+        adapter: "google",
+        googleMode: "cloud-code-assist",
+        authMode: "oauth",
+        baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+      } as unknown as OcxProviderConfig;
+      clearKeyCooldowns("google");
+
+      expect(shouldProactivelyFallbackGoogleToAntigravity(config, "gemini-4-argon", 1_000, now)).toBe(true);
+      expect(shouldProactivelyFallbackGoogleToAntigravity(config, "gemini-4-hydrogen", 250_000, now)).toBe(true);
+      expect(shouldProactivelyFallbackGoogleToAntigravity(config, "gemini-4-hydrogen", 120_000, now)).toBe(false);
+
+      // Marking the model as congested triggers proactive circuit-breaking to Antigravity for 3m.
+      markAiStudioModelCongested("gemini-4-hydrogen", now);
+      expect(isAiStudioModelCongested("gemini-4-hydrogen", now)).toBe(true);
+      expect(shouldProactivelyFallbackGoogleToAntigravity(config, "gemini-4-hydrogen", 120_000, now)).toBe(true);
+      expect(shouldProactivelyFallbackGoogleToAntigravity(config, "gemini-4-hydrogen", 120_000, now + 3 * 60_000 + 1)).toBe(false);
+
+      markAiStudioModelCongested("gemini-4-hydrogen", now);
+      clearKeyCooldowns("google");
+      expect(isAiStudioModelCongested("gemini-4-hydrogen", now)).toBe(false);
+    } finally {
+      if (prevHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = prevHome;
+      removeTreeWithRetry(home);
+    }
   });
 });
