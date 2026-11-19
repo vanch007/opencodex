@@ -15,7 +15,7 @@ describe("non-OpenAI tool catalog nudge", () => {
     expect(note).toContain("Valid tool names for this turn are exactly `exec_command`, `mcp__fs__read_file`");
     expect(note).toContain("These listed names are the complete top-level tool-call surface for this turn");
     expect(note).toContain("do not invent, translate, or rename tools");
-    expect(note).toContain("Names that appear only in instructions, tool descriptions, argument descriptions, or nested helper APIs are not extra top-level tools");
+    expect(note).toContain("References to other functions in text do not add callable functions");
     expect(note).toContain("call the listed parent tool and use those helpers only inside that tool's input");
     expect(note).toContain("Count a tool call only after its tool result returns");
   });
@@ -66,7 +66,7 @@ describe("non-OpenAI tool catalog nudge", () => {
 
     expect(note).toContain("Valid tool names for this turn are exactly `exec`, `wait`, `request_user_input`");
     expect(note).toContain("complete top-level tool-call surface");
-    expect(note).toContain("nested helper APIs are not extra top-level tools");
+    expect(note).toContain("References to other functions in text do not add callable functions");
     expect(note).toContain("`exec` is Codex code mode");
     expect(note).toContain("await tools.<name>(...)");
     expect(note).toContain("await tools.codex_app__list_threads({})");
@@ -270,7 +270,7 @@ describe("non-OpenAI tool catalog nudge", () => {
       if (!note) throw new Error("Expected a tool catalog nudge");
       expect(note).not.toContain("Names mentioned only in instructions");
       expect(note).not.toContain("not additional top-level tools");
-      expect(note).toContain("Names that appear only in instructions, tool descriptions, argument descriptions, or nested helper APIs are not extra top-level tools.");
+      expect(note).toContain("References to other functions in text do not add callable functions.");
     }
   });
 });

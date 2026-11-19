@@ -22,11 +22,11 @@ import type { OcxTool } from "../types";
 import { contentPartsToText, parseDataUrl } from "./image";
 import { bindVertexRequestAuthority, GCP_CREDENTIAL_MARKER_PREFIX, gcpCredentialMarkerAccount, getVertexAccessTokenWithAuthority } from "../lib/gcp-adc";
 import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../providers/api-key-pause";
-import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
+import { fetchAntigravityWithRetry, fetchVertexWithRetry, GOOGLE_HOSTED_ITERATION_SEND_LIMIT } from "./google-http";
 import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./google-errors";
 import { readDisplaySafeErrorPayloadText } from "./upstream-http-error";
-import { isVertexTruncatedTurn, vertexTruncationErrorEvent } from "./google-truncation";
 import { googleContentFilterEvent, googleTextPolicyRefusalEvent } from "./google-content-filter";
+import { googleModeLabel, googlePromptBlockedEvent, googleStopReason, isGoogleTruncatedTurn, vertexTruncationErrorEvent } from "./google-truncation";
 import { antigravitySessionAnchor, antigravityUserAgentForWireModel, antigravitySessionId, isLikelyRealThoughtSignature, sanitizeAntigravityClaudeSignatures } from "./google-antigravity-wire";
 import { enforceAntigravityClaudeImageLimits, normalizeAntigravityClaudeImages } from "./google-antigravity-images";
 import { summarizeGoogleWireShape } from "./google-wire-shape";
@@ -346,7 +346,8 @@ function geminiToolResultParts(
 ): unknown[] {
   const functionResponse: Record<string, unknown> = {
     name: wireName,
-    response: { result: geminiToolResultText(msg.content) },
+    // Google documents an "error" key for a call that failed to execute; CPA writes it on every route.
+    response: msg.isError ? { error: geminiToolResultText(msg.content) } : { result: geminiToolResultText(msg.content) },
     id: wireCallId,
   };
   const images = toolResultImageParts(msg.content);
@@ -407,6 +408,8 @@ function messagesToGeminiFormat(
 
   const contents: unknown[] = [];
   const replayedCallIds: string[] = [];
+  // On Cloud Code Assist the identity model is the routed wire model.
+  const claudeOnCloudCodeAssist = isCloudCodeAssist && /^claude-/i.test(identityModelId);
 
   const callIds = createToolCallIdAllocator();
   for (const msg of parsed.context.messages) {
@@ -471,6 +474,12 @@ function messagesToGeminiFormat(
               // video. The marker on the part is the fallback for wires without one, not this
               // wire's best effort (#5212).
               parts.push({ inline_data: { mime_type: p.mediaType, data: p.data } });
+              continue;
+            }
+            // Gemini accepts WAV and MP3 bytes as inline_data. Antigravity hands Claude models an
+            // Anthropic message, which has no audio block, so they keep the text marker.
+            if (p.type === "audio" && !claudeOnCloudCodeAssist) {
+              parts.push({ inline_data: { mime_type: p.format === "mp3" ? "audio/mp3" : "audio/wav", data: p.data } });
               continue;
             }
             // Drop empty/malformed text instead of emitting `{ text: "" }` or a bare `{}` part.
@@ -675,7 +684,7 @@ function toolChoiceToGeminiToolConfig(parsed: OcxParsedRequest): Record<string, 
   return {
     functionCallingConfig: {
       mode: "ANY",
-      allowedFunctionNames: [resolveToolChoiceWireName(parsed.context.tools, choice.name)],
+      allowedFunctionNames: [resolveToolChoiceWireName(parsed.context.tools, choice.name, choice)],
     },
   };
 }
@@ -683,8 +692,11 @@ function toolChoiceToGeminiToolConfig(parsed: OcxParsedRequest): Record<string, 
 function usageFromGemini(usage: Record<string, number> | undefined): OcxUsage | undefined {
   if (!usage) return undefined;
   return {
-    inputTokens: usage.promptTokenCount ?? 0,
-    outputTokens: usage.candidatesTokenCount ?? 0,
+    // Google reports tool-use prompt tokens (search grounding, URL context) beside the prompt.
+    inputTokens: (usage.promptTokenCount ?? 0) + (usage.toolUsePromptTokenCount ?? 0),
+    // Google reports thinking beside candidates. Every other adapter's output includes reasoning
+    // (telemetry clamps reasoning to output, src/telemetry/aggregate.ts), and Google bills it as output.
+    outputTokens: (usage.candidatesTokenCount ?? 0) + (usage.thoughtsTokenCount ?? 0),
     ...(usage.cachedContentTokenCount !== undefined ? { cachedInputTokens: usage.cachedContentTokenCount } : {}),
     ...(usage.thoughtsTokenCount !== undefined ? { reasoningOutputTokens: usage.thoughtsTokenCount } : {}),
   };
@@ -999,6 +1011,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
     // 429 rotation and raw error formatting.
     ...(provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist"
       ? {
+          hostedIterationSendLimit: GOOGLE_HOSTED_ITERATION_SEND_LIMIT,
           fetchResponse: async (request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response> => {
             const res = await (provider.googleMode === "cloud-code-assist" ? fetchAntigravityWithRetry : fetchVertexWithRetry)(
               request,
@@ -1388,6 +1401,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       };
       let pendingUsage: OcxUsage | undefined;
       let toolCallsStarted = 0;
+      let sawVisibleOutput = false;
       let lastFinishReason: string | undefined;
       let contentFilterError: Extract<AdapterEvent, { type: "error" }> | undefined;
       // Fixed, small diagnostic prefix; overflow disables matching rather than retaining output.
@@ -1469,6 +1483,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         // absent key and an empty array are already skipped here; `null` joins them. A non-null
         // non-array container is still claimed structure the parser cannot read, and stays
         // terminal.
+        // A prompt Google refused before generating arrives as promptFeedback with no candidates.
+        if ((rawCandidates === undefined || rawCandidates === null || (Array.isArray(rawCandidates) && rawCandidates.length === 0))
+          && isGoogleRecord(feedback) && typeof feedback.blockReason === "string" && feedback.blockReason) {
+          yield googlePromptBlockedEvent(googleModeLabel(provider.googleMode), feedback.blockReason, pendingUsage);
+          return "terminate";
+        }
         if (rawCandidates === undefined || rawCandidates === null) return "continue";
         if (!Array.isArray(rawCandidates)) {
           yield invalidGoogleShapeEvent({
@@ -1550,6 +1570,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
                   ? policyRefusalText + textEvent.text : undefined;
               }
               emittedContentEvent = true;
+              // Thought text is not visible output: a thoughts-only turn that drops its answer fails closed.
+              if (textEvent.type === "text_delta") sawVisibleOutput = true;
               yield textEvent;
             }
             const inline = (part as { inlineData?: { mimeType?: string; data?: string } }).inlineData;
@@ -1562,6 +1584,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
                   const filePath = await materializeInlineImage(inline.data, imageBudget);
                   const escapedPath = artifactMarkdownUrl(filePath);
                   emittedContentEvent = true;
+                  sawVisibleOutput = true;
                   yield { type: "text_delta", text: `\n![image](${escapedPath})\n` };
                 } catch {
                   yield { type: "error", message: "failed to materialize inline image" };
@@ -1573,6 +1596,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
               const id = `call_${crypto.randomUUID().slice(0, 8)}`;
               toolCallsStarted++;
               emittedContentEvent = true;
+              sawVisibleOutput = true;
               const restoredName = restoreGoogleToolName(functionCall.name);
               const toolStart: AdapterEvent = {
                 type: "tool_call_start",
@@ -1643,11 +1667,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           yield { ...contentFilterError, usage: pendingUsage };
           return;
         }
-        // Fail-closed: a turn cut off mid tool call (MAX_TOKENS / MALFORMED_FUNCTION_CALL) surfaces
-        // an error instead of a silently-incomplete done. Mirrors kiro-truncation.
-        if ((provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist")
-          && isVertexTruncatedTurn(lastFinishReason, toolCallsStarted)) {
-          yield vertexTruncationErrorEvent(lastFinishReason, toolCallsStarted, pendingUsage);
+        // Fail-closed on every Google mode: a turn cut off mid tool call (MAX_TOKENS /
+        // MALFORMED_FUNCTION_CALL), or one whose output Google dropped before anything visible
+        // arrived (UNEXPECTED_TOOL_CALL / MALFORMED_RESPONSE), surfaces an error instead of a
+        // silently incomplete done. Mirrors kiro-truncation.
+        if (isGoogleTruncatedTurn(lastFinishReason, toolCallsStarted, sawVisibleOutput)) {
+          yield vertexTruncationErrorEvent(lastFinishReason, toolCallsStarted, pendingUsage, googleModeLabel(provider.googleMode));
           return;
         }
         if (!sawAnyFrame || !sawTerminalSignal) {
@@ -1660,9 +1685,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           yield { type: "error", message: "upstream stream ended without a terminal signal — possible truncation" };
           return;
         }
-        const stopReason = lastFinishReason === "MAX_TOKENS"
-          ? "max_tokens"
-          : undefined;
+        const stopReason = googleStopReason(lastFinishReason);
         yield {
           type: "done",
           usage: pendingUsage,
@@ -1797,6 +1820,11 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       }
       const candidates = rawCandidates as { finishReason?: string }[] | undefined;
       if (!candidates?.length) {
+        const feedback = (json as { promptFeedback?: unknown }).promptFeedback;
+        if (isGoogleRecord(feedback) && typeof feedback.blockReason === "string" && feedback.blockReason) {
+          return finish([googlePromptBlockedEvent(googleModeLabel(provider.googleMode), feedback.blockReason,
+            usageFromGemini(json.usageMetadata as Record<string, number> | undefined))]);
+        }
         return finish([{ type: "error", message: "google response contained no candidates" }]);
       }
       const rawCandidate: unknown = candidates[0];
@@ -1813,6 +1841,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       const contentBlock = googleContentFilterEvent(candidate.finishReason, "finishReason", usageFromGemini(json.usageMetadata as Record<string, number> | undefined));
       if (contentBlock) return finish([contentBlock]);
       let toolCallsStarted = 0;
+      let sawVisibleOutput = false;
       const imageBudget = createImageBudget();
       const rawContent: unknown = candidate.content;
       const invalidContent = diagnoseGoogleContent(rawContent);
@@ -1837,7 +1866,10 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             pendingThoughtSig = sig;
           }
           const textEvent = googlePartTextEvent(part, returnsThoughtSummaries);
-          if (textEvent) events.push(textEvent);
+          if (textEvent) {
+            if (textEvent.type === "text_delta") sawVisibleOutput = true;
+            events.push(textEvent);
+          }
           const inline = (part as { inlineData?: { mimeType?: string; data?: string } }).inlineData;
           if (inline && typeof inline.data === "string") {
             if (inline.data.length > MAX_ENCODED_BYTES_PER_IMAGE) {
@@ -1846,6 +1878,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
               try {
                 const filePath = await materializeInlineImage(inline.data, imageBudget);
                 const escapedPath = artifactMarkdownUrl(filePath);
+                sawVisibleOutput = true;
                 events.push({ type: "text_delta", text: `\n![image](${escapedPath})\n` });
               } catch {
                 events.push({ type: "error", message: "failed to materialize inline image" });
@@ -1856,6 +1889,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           if (functionCall) {
             const id = `call_${crypto.randomUUID().slice(0, 8)}`;
             toolCallsStarted++;
+            sawVisibleOutput = true;
             const toolStart: AdapterEvent = {
               type: "tool_call_start",
               id,
@@ -1869,14 +1903,13 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         }
       }
 
-      // Fail-closed truncation, same as the stream path: a non-stream turn cut off mid tool call
-      // (MAX_TOKENS / MALFORMED_FUNCTION_CALL) surfaces an error instead of a silent done.
-      if ((provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist")
-        && isVertexTruncatedTurn(candidate.finishReason, toolCallsStarted)) {
+      // Fail-closed, same rule as the stream path, on every Google mode.
+      if (isGoogleTruncatedTurn(candidate.finishReason, toolCallsStarted, sawVisibleOutput)) {
         return finish([vertexTruncationErrorEvent(
           candidate.finishReason,
           toolCallsStarted,
           usageFromGemini(json.usageMetadata as Record<string, number> | undefined),
+          googleModeLabel(provider.googleMode),
         )]);
       }
 
@@ -1886,9 +1919,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       // turn as completed — and, on a compaction turn, installs the half-written summary as
       // replacement history (#422).
       const finishReason = candidate.finishReason as string | undefined;
-      const stopReason = finishReason === "MAX_TOKENS"
-        ? "max_tokens"
-        : undefined;
+      const stopReason = googleStopReason(finishReason);
       events.push({
         type: "done",
         usage: usageFromGemini(usage),

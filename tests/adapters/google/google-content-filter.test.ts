@@ -30,7 +30,7 @@ for (const stream of [true, false]) {
     test(`${stream ? "SSE" : "JSON"}: ${reason} is explicit, non-retryable, retains usage`, async () => {
       const events = await parse([{ candidates: [{ finishReason: reason }], usageMetadata: usage }], stream);
       expect(events).toHaveLength(1);
-      expect(events[0]).toMatchObject({ type: "error", status: 400, code: "invalid_prompt", errorType: "invalid_request_error", retryable: false, usage: { inputTokens: 123, outputTokens: 2 } });
+      expect(events[0]).toMatchObject({ type: "error", status: 400, code: "invalid_prompt", errorType: "invalid_request_error", retryable: false, usage: { inputTokens: 123, outputTokens: 6 } });
       expect((events[0] as any).message).toContain(`finishReason=${reason}`);
       const wire = buildResponseJSON(events, "gemini-3.8-flash");
       expect(wire.status).toBe("failed");

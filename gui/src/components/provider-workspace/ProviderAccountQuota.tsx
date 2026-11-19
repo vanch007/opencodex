@@ -14,12 +14,19 @@ export default function ProviderAccountQuota({
   quotaPending,
   quotaFailure,
   quotaReadAt,
+  uncoveredQuota,
   provider,
   plan,
   hideArgon,
-}: AccountQuotaReading & { provider?: string }) {
+}: AccountQuotaReading & {
+  uncoveredQuota?: AccountQuotaReading["quota"];
+  provider?: string;
+  plan?: string | null;
+  hideArgon?: boolean;
+}) {
   const t = useT();
   const quota = accountQuotaFromReport({ quota: rawQuota });
+  const displayedQuota = uncoveredQuota === undefined ? quota : uncoveredQuota;
   if (quotaMode === "unsupported") {
     return <p className="muted" data-quota-state="unsupported">{t("pws.quotaUnsupported")}</p>;
   }
@@ -31,17 +38,17 @@ export default function ProviderAccountQuota({
 
   return <div data-quota-state={state}>
     {quotaUnavailable && <p className="muted pwi-auth-acct-quota-stale">{t(failure ? `pws.quotaFailure.${failure}` : "pws.accountQuotaUnavailable")}</p>}
-    {quota || pending ? (
+    {displayedQuota || pending ? (
       isAntigravity ? (
         <AntigravityQuotaCard quota={quota} pending={pending && !quota} hideArgon={shouldHideArgon} plan={plan} />
       ) : (
         <ProviderCapacityQuota
-          report={{ quota, updatedAt: quota?.updatedAt, ...(quotaMode === "passive" ? { observed: true } : {}) }}
+          report={{ quota: displayedQuota, updatedAt: displayedQuota?.updatedAt, ...(quotaMode === "passive" ? { observed: true } : {}) }}
           pending={pending && !quota}
           hideArgon={shouldHideArgon}
         />
       )
-    ) : !quotaUnavailable && (
+    ) : !quota && !quotaUnavailable && (
       <p className="muted">{t(quotaMode === "passive" ? "pws.quotaUnobserved" : "pws.quotaUnavailable")}</p>
     )}
     {quotaUnavailable && quota && !isAntigravity && <p className="muted">
