@@ -39,6 +39,10 @@ interface CockpitHealthTableProps {
   onAddPlatform: (email: string, provider: "google-antigravity" | "openai" | "xai") => void;
   onCopy: (text: string, id: string) => void;
   onRemoveGroup: (group: EmailAccountGroup) => void;
+  onRemovePlatform?: (
+    group: EmailAccountGroup,
+    platform: "antigravity" | "aiStudio" | "chatgpt" | "grok",
+  ) => void;
 }
 
 function getPlanBadgeClass(plan?: string | null): string {
@@ -83,6 +87,7 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
   onAddPlatform,
   onCopy,
   onRemoveGroup,
+  onRemovePlatform,
 }) => {
   const isAllSelected = groups.length > 0 && selectedIds.size === groups.length;
   const unusableCount = groups.filter(g => g.anyUnusable).length;
@@ -184,9 +189,6 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
             const gk = group.grok;
             const primaryOAuth = ag ?? gk ?? cg;
             const isCopied = Boolean(isCopiedKey?.(group.emailKey));
-            const isTestingHealth = Boolean(
-              (ag && testingHealthIds.has(ag.id)) || (gk && testingHealthIds.has(gk.id)),
-            );
             const isRefreshingGroup = Boolean(
               (ag && refreshingId === ag.id) || (cg && refreshingId === cg.id) || (gk && refreshingId === gk.id),
             );
@@ -203,9 +205,6 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
             const claRem = findAgWin("cla", true) ? agRem(findAgWin("cla", true)) : null;
             const gemRem = findAgWin("gem", true) ? agRem(findAgWin("gem", true)) : null;
             const argonRem = group.hasArgon && findAgWin("argon", true) ? agRem(findAgWin("argon", true)) : null;
-            const agMinRem = [claRem, gemRem, argonRem].filter((v): v is number => v !== null);
-            const agBarPct = agMinRem.length > 0 ? Math.min(...agMinRem) : 100;
-            const agTones = quotaToneClasses(agBarPct);
 
             return (
               <tr
@@ -271,7 +270,7 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                 {/* Column 1: Antigravity */}
                 <td>
                   {ag ? (
-                    <div className="cockpit-table-cell-col" style={{ minWidth: 175 }}>
+                    <div className="cockpit-table-cell-col" style={{ minWidth: 190 }}>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
                           <span className={getPlanBadgeClass(ag.plan)} style={{ fontSize: 10, padding: "1px 6px" }}>
@@ -302,27 +301,126 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                               {ag.healthTest.ok ? "200" : ag.healthTest.status}
                             </span>
                           )}
+                          {ag.paused && (
+                            <span style={{ fontSize: 10, color: "#f87171", fontWeight: 600 }}>已暂停</span>
+                          )}
                         </div>
-                        <button
-                          type="button"
-                          className={`cockpit-icon-btn ${ag.active ? "cockpit-icon-btn--active" : ""}`}
-                          style={{ width: 22, height: 22 }}
-                          data-tip={ag.active ? "Antigravity 当前账号" : "切换 Antigravity 到此账号"}
-                          disabled={switchingId === ag.id}
-                          onClick={() => onSwitch(ag)}
-                        >
-                          <IconPlay style={{ width: 12, height: 12 }} />
-                        </button>
+                        {/* Antigravity 平台专属操作按钮组 */}
+                        <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+                          <button
+                            type="button"
+                            className={`cockpit-icon-btn ${ag.active ? "cockpit-icon-btn--active" : ""}`}
+                            style={{ width: 20, height: 20 }}
+                            data-tip={ag.active ? "Antigravity 当前账号" : "切换 Antigravity 到此账号"}
+                            disabled={switchingId === ag.id}
+                            onClick={() => onSwitch(ag)}
+                          >
+                            <IconPlay style={{ width: 11, height: 11 }} />
+                          </button>
+                          <button
+                            type="button"
+                            className="cockpit-icon-btn"
+                            style={{ width: 20, height: 20 }}
+                            data-tip="刷新 Antigravity 配额"
+                            disabled={refreshingId === ag.id}
+                            onClick={() => onRefresh(ag)}
+                          >
+                            <IconRefresh style={{ width: 11, height: 11 }} className={refreshingId === ag.id ? "spin" : ""} />
+                          </button>
+                          {onTestHealth && (
+                            <button
+                              type="button"
+                              className="cockpit-icon-btn"
+                              style={{ width: 20, height: 20 }}
+                              data-tip="测试 Antigravity 真实模型健康"
+                              disabled={testingHealthIds.has(ag.id)}
+                              onClick={() => onTestHealth(ag)}
+                            >
+                              <IconActivity
+                                style={{ width: 11, height: 11, color: testingHealthIds.has(ag.id) ? "#f59e0b" : "#38bdf8" }}
+                                className={testingHealthIds.has(ag.id) ? "spin" : ""}
+                              />
+                            </button>
+                          )}
+                          {onTogglePause && (
+                            <button
+                              type="button"
+                              className={`cockpit-icon-btn ${ag.paused ? "cockpit-icon-btn--primary" : ""}`}
+                              style={{ width: 20, height: 20 }}
+                              data-tip={ag.paused ? "恢复 Antigravity" : "暂停 Antigravity"}
+                              disabled={pausingId === ag.id}
+                              onClick={() => onTogglePause(ag, !ag.paused)}
+                            >
+                              {pausingId === ag.id ? (
+                                <IconRefresh style={{ width: 11, height: 11, animation: "spin 1s linear infinite" }} />
+                              ) : ag.paused ? (
+                                <IconPower style={{ width: 11, height: 11, color: "#34d399" }} />
+                              ) : (
+                                <IconPause style={{ width: 11, height: 11 }} />
+                              )}
+                            </button>
+                          )}
+                          {onRemovePlatform && (
+                            <button
+                              type="button"
+                              className="cockpit-icon-btn cockpit-icon-btn--danger"
+                              style={{ width: 20, height: 20 }}
+                              data-tip="移除 Antigravity 授权"
+                              onClick={() => onRemovePlatform(group, "antigravity")}
+                            >
+                              <IconTrash style={{ width: 11, height: 11 }} />
+                            </button>
+                          )}
+                        </div>
                       </div>
-                      <div className="cockpit-table-cell-metrics">
-                        <span>Cla周: <strong className={claRem !== null ? quotaToneClasses(claRem).text : ""}>{claRem ?? 100}%</strong></span>
-                        <span>Gem周: <strong className={gemRem !== null ? quotaToneClasses(gemRem).text : ""}>{gemRem ?? 100}%</strong></span>
-                        {argonRem !== null && (
-                          <span>Argon: <strong className={quotaToneClasses(argonRem).text}>{argonRem}%</strong></span>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 4 }}>
+                        {/* Claude 周额度条 */}
+                        <div>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 10.5, lineHeight: 1.2, color: "var(--muted)" }}>
+                            <span>Cla:</span>
+                            <strong className={claRem !== null ? quotaToneClasses(claRem).text : ""} style={{ fontSize: 10.5 }}>
+                              {claRem !== null ? `${claRem}%` : "100%"}
+                            </strong>
+                          </div>
+                          <div className="cockpit-mini-bar-track" style={{ height: 3 }}>
+                            <div
+                              className={`cockpit-mini-bar-fill ${quotaToneClasses(claRem ?? 100).bar}`}
+                              style={{ width: `${claRem ?? 100}%` }}
+                            />
+                          </div>
+                        </div>
+                        {/* Gemini 周额度条 */}
+                        <div>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 10.5, lineHeight: 1.2, color: "var(--muted)" }}>
+                            <span>Gem:</span>
+                            <strong className={gemRem !== null ? quotaToneClasses(gemRem).text : ""} style={{ fontSize: 10.5 }}>
+                              {gemRem !== null ? `${gemRem}%` : "100%"}
+                            </strong>
+                          </div>
+                          <div className="cockpit-mini-bar-track" style={{ height: 3 }}>
+                            <div
+                              className={`cockpit-mini-bar-fill ${quotaToneClasses(gemRem ?? 100).bar}`}
+                              style={{ width: `${gemRem ?? 100}%` }}
+                            />
+                          </div>
+                        </div>
+                        {/* Argon 额度条 (若支持) */}
+                        {group.hasArgon && (
+                          <div>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 10.5, lineHeight: 1.2, color: "var(--muted)" }}>
+                              <span>Argon:</span>
+                              <strong className={argonRem !== null ? quotaToneClasses(argonRem).text : ""} style={{ fontSize: 10.5 }}>
+                                {argonRem !== null ? `${argonRem}%` : "100%"}
+                              </strong>
+                            </div>
+                            <div className="cockpit-mini-bar-track" style={{ height: 3 }}>
+                              <div
+                                className={`cockpit-mini-bar-fill ${quotaToneClasses(argonRem ?? 100).bar}`}
+                                style={{ width: `${argonRem ?? 100}%` }}
+                              />
+                            </div>
+                          </div>
                         )}
-                      </div>
-                      <div className="cockpit-mini-bar-track">
-                        <div className={`cockpit-mini-bar-fill ${agTones.bar}`} style={{ width: `${agBarPct}%` }} />
                       </div>
                     </div>
                   ) : (
@@ -340,7 +438,7 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                 {/* Column 2: AI Studio (Local Statistics) */}
                 <td>
                   {ai ? (
-                    <div className="cockpit-table-cell-col" style={{ minWidth: 168 }}>
+                    <div className="cockpit-table-cell-col" style={{ minWidth: 175 }}>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
                         <span
                           className="cockpit-key-pill"
@@ -350,12 +448,35 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                           <span>🔑</span>
                           <span>{ai.apiKey.slice(0, 6)}...{ai.apiKey.slice(-4)}</span>
                         </span>
-                        <span
-                          className={`ag-quota-pct ${quotaToneClasses(ai.quota?.remainingPercent ?? 100).text}`}
-                          style={{ fontSize: 11.5 }}
-                        >
-                          {ai.quota?.dailyExhausted ? "已耗尽" : ai.quota?.inCooldown ? "冷却中" : `${ai.quota?.remainingPercent ?? 100}%`}
-                        </span>
+                        {/* AI Studio 平台专属操作按钮组 */}
+                        <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+                          <span
+                            className={`ag-quota-pct ${quotaToneClasses(ai.quota?.remainingPercent ?? 100).text}`}
+                            style={{ fontSize: 11, marginRight: 2 }}
+                          >
+                            {ai.quota?.dailyExhausted ? "耗尽" : ai.quota?.inCooldown ? "冷却" : `${ai.quota?.remainingPercent ?? 100}%`}
+                          </span>
+                          <button
+                            type="button"
+                            className="cockpit-icon-btn"
+                            style={{ width: 20, height: 20 }}
+                            data-tip="修改/换绑 AI Studio Key"
+                            onClick={() => onEditAiStudioKey(group)}
+                          >
+                            <IconPencil style={{ width: 11, height: 11 }} />
+                          </button>
+                          {onRemovePlatform && (
+                            <button
+                              type="button"
+                              className="cockpit-icon-btn cockpit-icon-btn--danger"
+                              style={{ width: 20, height: 20 }}
+                              data-tip="解绑移除 AI Studio Key"
+                              onClick={() => onRemovePlatform(group, "aiStudio")}
+                            >
+                              <IconTrash style={{ width: 11, height: 11 }} />
+                            </button>
+                          )}
+                        </div>
                       </div>
                       <div className="cockpit-table-cell-metrics">
                         <span>
@@ -399,7 +520,7 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                       const govRem = weeklyRem ?? monthRem;
                       const cgTones = quotaToneClasses(govRem);
                       return (
-                        <div className="cockpit-table-cell-col" style={{ minWidth: 145 }}>
+                        <div className="cockpit-table-cell-col" style={{ minWidth: 165 }}>
                           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
                             <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                               <span className={getPlanBadgeClass(cg.plan)} style={{ fontSize: 10, padding: "1px 6px" }}>
@@ -409,27 +530,57 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                                 <span style={{ fontSize: 10, color: "#f87171", fontWeight: 600 }}>已暂停</span>
                               )}
                             </div>
+                            {/* ChatGPT 平台专属操作按钮组 */}
                             <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
                               <button
                                 type="button"
                                 className={`cockpit-icon-btn ${cg.active ? "cockpit-icon-btn--active" : ""}`}
-                                style={{ width: 22, height: 22 }}
+                                style={{ width: 20, height: 20 }}
                                 data-tip={cg.active ? "ChatGPT 当前账号" : "切换 ChatGPT 到此账号"}
                                 disabled={switchingId === cg.id}
                                 onClick={() => onSwitch(cg)}
                               >
-                                <IconPlay style={{ width: 12, height: 12 }} />
+                                <IconPlay style={{ width: 11, height: 11 }} />
                               </button>
                               <button
                                 type="button"
                                 className="cockpit-icon-btn"
-                                style={{ width: 22, height: 22 }}
+                                style={{ width: 20, height: 20 }}
                                 data-tip="刷新 ChatGPT 配额"
                                 disabled={refreshingId === cg.id}
                                 onClick={() => onRefresh(cg)}
                               >
-                                <IconRefresh style={{ width: 12, height: 12 }} className={refreshingId === cg.id ? "spin" : ""} />
+                                <IconRefresh style={{ width: 11, height: 11 }} className={refreshingId === cg.id ? "spin" : ""} />
                               </button>
+                              {onTogglePause && (
+                                <button
+                                  type="button"
+                                  className={`cockpit-icon-btn ${cg.paused ? "cockpit-icon-btn--primary" : ""}`}
+                                  style={{ width: 20, height: 20 }}
+                                  data-tip={cg.paused ? "恢复 ChatGPT" : "暂停 ChatGPT"}
+                                  disabled={pausingId === cg.id}
+                                  onClick={() => onTogglePause(cg, !cg.paused)}
+                                >
+                                  {pausingId === cg.id ? (
+                                    <IconRefresh style={{ width: 11, height: 11, animation: "spin 1s linear infinite" }} />
+                                  ) : cg.paused ? (
+                                    <IconPower style={{ width: 11, height: 11, color: "#34d399" }} />
+                                  ) : (
+                                    <IconPause style={{ width: 11, height: 11 }} />
+                                  )}
+                                </button>
+                              )}
+                              {onRemovePlatform && (
+                                <button
+                                  type="button"
+                                  className="cockpit-icon-btn cockpit-icon-btn--danger"
+                                  style={{ width: 20, height: 20 }}
+                                  data-tip="移除 ChatGPT 授权"
+                                  onClick={() => onRemovePlatform(group, "chatgpt")}
+                                >
+                                  <IconTrash style={{ width: 11, height: 11 }} />
+                                </button>
+                              )}
                             </div>
                           </div>
                           <div className="cockpit-table-cell-metrics">
@@ -467,32 +618,82 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                       const remainPct = Math.max(0, Math.min(100, Math.round(100 - (gk.quota?.weeklyPercent ?? 0))));
                       const gkTones = quotaToneClasses(remainPct);
                       return (
-                        <div className="cockpit-table-cell-col" style={{ minWidth: 135 }}>
+                        <div className="cockpit-table-cell-col" style={{ minWidth: 165 }}>
                           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
-                            <span className={getPlanBadgeClass(gk.plan)} style={{ fontSize: 10, padding: "1px 6px" }}>
-                              {getPlanText(gk.plan)}
-                            </span>
+                            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                              <span className={getPlanBadgeClass(gk.plan)} style={{ fontSize: 10, padding: "1px 6px" }}>
+                                {getPlanText(gk.plan)}
+                              </span>
+                              {gk.paused && (
+                                <span style={{ fontSize: 10, color: "#f87171", fontWeight: 600 }}>已暂停</span>
+                              )}
+                            </div>
+                            {/* Grok 平台专属操作按钮组 */}
                             <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
                               <button
                                 type="button"
                                 className={`cockpit-icon-btn ${gk.active ? "cockpit-icon-btn--active" : ""}`}
-                                style={{ width: 22, height: 22 }}
+                                style={{ width: 20, height: 20 }}
                                 data-tip={gk.active ? "Grok 当前账号" : "切换 Grok 到此账号"}
                                 disabled={switchingId === gk.id}
                                 onClick={() => onSwitch(gk)}
                               >
-                                <IconPlay style={{ width: 12, height: 12 }} />
+                                <IconPlay style={{ width: 11, height: 11 }} />
                               </button>
                               <button
                                 type="button"
                                 className="cockpit-icon-btn"
-                                style={{ width: 22, height: 22 }}
+                                style={{ width: 20, height: 20 }}
                                 data-tip="刷新 Grok 配额"
                                 disabled={refreshingId === gk.id}
                                 onClick={() => onRefresh(gk)}
                               >
-                                <IconRefresh style={{ width: 12, height: 12 }} className={refreshingId === gk.id ? "spin" : ""} />
+                                <IconRefresh style={{ width: 11, height: 11 }} className={refreshingId === gk.id ? "spin" : ""} />
                               </button>
+                              {onTestHealth && (
+                                <button
+                                  type="button"
+                                  className="cockpit-icon-btn"
+                                  style={{ width: 20, height: 20 }}
+                                  data-tip="测试 Grok 真实模型健康"
+                                  disabled={testingHealthIds.has(gk.id)}
+                                  onClick={() => onTestHealth(gk)}
+                                >
+                                  <IconActivity
+                                    style={{ width: 11, height: 11, color: testingHealthIds.has(gk.id) ? "#f59e0b" : "#38bdf8" }}
+                                    className={testingHealthIds.has(gk.id) ? "spin" : ""}
+                                  />
+                                </button>
+                              )}
+                              {onTogglePause && (
+                                <button
+                                  type="button"
+                                  className={`cockpit-icon-btn ${gk.paused ? "cockpit-icon-btn--primary" : ""}`}
+                                  style={{ width: 20, height: 20 }}
+                                  data-tip={gk.paused ? "恢复 Grok" : "暂停 Grok"}
+                                  disabled={pausingId === gk.id}
+                                  onClick={() => onTogglePause(gk, !gk.paused)}
+                                >
+                                  {pausingId === gk.id ? (
+                                    <IconRefresh style={{ width: 11, height: 11, animation: "spin 1s linear infinite" }} />
+                                  ) : gk.paused ? (
+                                    <IconPower style={{ width: 11, height: 11, color: "#34d399" }} />
+                                  ) : (
+                                    <IconPause style={{ width: 11, height: 11 }} />
+                                  )}
+                                </button>
+                              )}
+                              {onRemovePlatform && (
+                                <button
+                                  type="button"
+                                  className="cockpit-icon-btn cockpit-icon-btn--danger"
+                                  style={{ width: 20, height: 20 }}
+                                  data-tip="移除 Grok 授权"
+                                  onClick={() => onRemovePlatform(group, "grok")}
+                                >
+                                  <IconTrash style={{ width: 11, height: 11 }} />
+                                </button>
+                              )}
                             </div>
                           </div>
                           <div className="cockpit-table-cell-metrics">
@@ -520,56 +721,17 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                   {formatCockpitDate(group.updatedAt)}
                 </td>
 
-                {/* Group Row Actions */}
+                {/* Group Row Common Actions */}
                 <td style={{ textAlign: "right" }}>
                   <div className="cockpit-card-actions" style={{ justifyContent: "flex-end" }}>
-                    {(ag || gk) && onTestHealth && (
-                      <button
-                        type="button"
-                        className="cockpit-icon-btn"
-                        data-tip="真实模型调用健康检测"
-                        disabled={isTestingHealth}
-                        onClick={() => onTestHealth((ag ?? gk)!)}
-                      >
-                        <IconActivity
-                          style={{ width: 14, height: 14, color: isTestingHealth ? "#f59e0b" : "#38bdf8" }}
-                          className={isTestingHealth ? "spin" : ""}
-                        />
-                      </button>
-                    )}
-                    {primaryOAuth && onTogglePause && (
-                      <button
-                        type="button"
-                        className={`cockpit-icon-btn ${primaryOAuth.paused ? "cockpit-icon-btn--primary" : ""}`}
-                        data-tip={primaryOAuth.paused ? "恢复启用账号" : "停用账号"}
-                        disabled={pausingId === primaryOAuth.id}
-                        onClick={() => onTogglePause(primaryOAuth, !primaryOAuth.paused)}
-                      >
-                        {pausingId === primaryOAuth.id ? (
-                          <IconRefresh style={{ width: 14, height: 14, animation: "spin 1s linear infinite" }} />
-                        ) : primaryOAuth.paused ? (
-                          <IconPower style={{ width: 14, height: 14, color: "#34d399" }} />
-                        ) : (
-                          <IconPause style={{ width: 14, height: 14 }} />
-                        )}
-                      </button>
-                    )}
                     <button
                       type="button"
                       className="cockpit-icon-btn"
-                      data-tip="刷新该邮箱全部已开通额度"
+                      data-tip="一键刷新该邮箱全部平台的额度"
                       disabled={isRefreshingGroup}
                       onClick={() => onRefreshGroup(group)}
                     >
                       <IconRefresh style={{ width: 14, height: 14 }} className={isRefreshingGroup ? "spin" : ""} />
-                    </button>
-                    <button
-                      type="button"
-                      className="cockpit-icon-btn"
-                      data-tip={ai ? "修改/解绑 AI Studio Key" : "关联 AI Studio Key"}
-                      onClick={() => onEditAiStudioKey(group)}
-                    >
-                      <span style={{ fontSize: 13 }}>🔑</span>
                     </button>
                     {primaryOAuth && (
                       <button
@@ -596,7 +758,7 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
                     <button
                       type="button"
                       className="cockpit-icon-btn cockpit-icon-btn--danger"
-                      data-tip="移除此邮箱下的账号配置"
+                      data-tip="移除该邮箱下所有平台的账号配置"
                       onClick={() => onRemoveGroup(group)}
                     >
                       <IconTrash style={{ width: 14, height: 14 }} />
@@ -611,3 +773,4 @@ export const CockpitHealthTable: React.FC<CockpitHealthTableProps> = ({
     </div>
   );
 };
+

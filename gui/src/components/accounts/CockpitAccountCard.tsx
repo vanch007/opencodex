@@ -36,6 +36,10 @@ interface CockpitAccountCardProps {
   onAddPlatform: (email: string, provider: "google-antigravity" | "openai" | "xai") => void;
   onCopy: (text: string, id: string) => void;
   onRemoveGroup: (group: EmailAccountGroup) => void;
+  onRemovePlatform?: (
+    group: EmailAccountGroup,
+    platform: "antigravity" | "aiStudio" | "chatgpt" | "grok",
+  ) => void;
   onShowInfo: (group: EmailAccountGroup) => void;
   onExport: (group: EmailAccountGroup) => void;
 }
@@ -81,6 +85,7 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
   onAddPlatform,
   onCopy,
   onRemoveGroup,
+  onRemovePlatform,
   onShowInfo,
   onExport,
 }) => {
@@ -211,6 +216,35 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
                   >
                     <IconRefresh style={{ width: 12, height: 12 }} className={refreshingId === ag.id ? "spin" : ""} />
                   </button>
+                  {onTogglePause && (
+                    <button
+                      type="button"
+                      className={`cockpit-icon-btn ${ag.paused ? "cockpit-icon-btn--primary" : ""}`}
+                      style={{ width: 22, height: 22 }}
+                      data-tip={ag.paused ? "恢复 Antigravity" : "暂停 Antigravity"}
+                      disabled={pausingId === ag.id}
+                      onClick={() => onTogglePause(ag, !ag.paused)}
+                    >
+                      {pausingId === ag.id ? (
+                        <IconRefresh style={{ width: 12, height: 12, animation: "spin 1s linear infinite" }} />
+                      ) : ag.paused ? (
+                        <IconPower style={{ width: 12, height: 12, color: "#34d399" }} />
+                      ) : (
+                        <IconPause style={{ width: 12, height: 12 }} />
+                      )}
+                    </button>
+                  )}
+                  {onRemovePlatform && (
+                    <button
+                      type="button"
+                      className="cockpit-icon-btn cockpit-icon-btn--danger"
+                      style={{ width: 22, height: 22 }}
+                      data-tip="移除 Antigravity 授权"
+                      onClick={() => onRemovePlatform(group, "antigravity")}
+                    >
+                      <IconTrash style={{ width: 12, height: 12 }} />
+                    </button>
+                  )}
                 </div>
               </div>
               <AntigravityQuotaCard quota={ag.quota} pending={ag.quotaPending} hideArgon={!group.hasArgon} plan={ag.plan} />
@@ -255,6 +289,17 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
                       <span className={`ag-quota-pct ${tones.text}`} style={{ fontSize: 12 }}>
                         {q?.dailyExhausted ? "已耗尽" : q?.inCooldown ? "冷却" : `${remPct}%`}
                       </span>
+                      {onRemovePlatform && (
+                        <button
+                          type="button"
+                          className="cockpit-icon-btn cockpit-icon-btn--danger"
+                          style={{ width: 18, height: 18 }}
+                          data-tip="解绑 AI Studio Key"
+                          onClick={() => onRemovePlatform(group, "aiStudio")}
+                        >
+                          <IconTrash style={{ width: 10, height: 10 }} />
+                        </button>
+                      )}
                     </div>
                   </div>
                   <div className="ag-quota-bar-track">
@@ -318,6 +363,45 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
                         >
                           <IconPlay style={{ width: 11, height: 11 }} />
                         </button>
+                        <button
+                          type="button"
+                          className="cockpit-icon-btn"
+                          style={{ width: 20, height: 20 }}
+                          data-tip="刷新 ChatGPT 配额"
+                          disabled={refreshingId === cg.id}
+                          onClick={() => onRefresh(cg)}
+                        >
+                          <IconRefresh style={{ width: 11, height: 11 }} className={refreshingId === cg.id ? "spin" : ""} />
+                        </button>
+                        {onTogglePause && (
+                          <button
+                            type="button"
+                            className={`cockpit-icon-btn ${cg.paused ? "cockpit-icon-btn--primary" : ""}`}
+                            style={{ width: 20, height: 20 }}
+                            data-tip={cg.paused ? "恢复 ChatGPT" : "暂停 ChatGPT"}
+                            disabled={pausingId === cg.id}
+                            onClick={() => onTogglePause(cg, !cg.paused)}
+                          >
+                            {pausingId === cg.id ? (
+                              <IconRefresh style={{ width: 11, height: 11, animation: "spin 1s linear infinite" }} />
+                            ) : cg.paused ? (
+                              <IconPower style={{ width: 11, height: 11, color: "#34d399" }} />
+                            ) : (
+                              <IconPause style={{ width: 11, height: 11 }} />
+                            )}
+                          </button>
+                        )}
+                        {onRemovePlatform && (
+                          <button
+                            type="button"
+                            className="cockpit-icon-btn cockpit-icon-btn--danger"
+                            style={{ width: 20, height: 20 }}
+                            data-tip="移除 ChatGPT 授权"
+                            onClick={() => onRemovePlatform(group, "chatgpt")}
+                          >
+                            <IconTrash style={{ width: 11, height: 11 }} />
+                          </button>
+                        )}
                       </div>
                     </div>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 11.5 }}>
@@ -376,6 +460,45 @@ export const CockpitAccountCard: React.FC<CockpitAccountCardProps> = ({
                         >
                           <IconPlay style={{ width: 11, height: 11 }} />
                         </button>
+                        <button
+                          type="button"
+                          className="cockpit-icon-btn"
+                          style={{ width: 20, height: 20 }}
+                          data-tip="刷新 Grok 配额"
+                          disabled={refreshingId === gk.id}
+                          onClick={() => onRefresh(gk)}
+                        >
+                          <IconRefresh style={{ width: 11, height: 11 }} className={refreshingId === gk.id ? "spin" : ""} />
+                        </button>
+                        {onTogglePause && (
+                          <button
+                            type="button"
+                            className={`cockpit-icon-btn ${gk.paused ? "cockpit-icon-btn--primary" : ""}`}
+                            style={{ width: 20, height: 20 }}
+                            data-tip={gk.paused ? "恢复 Grok" : "暂停 Grok"}
+                            disabled={pausingId === gk.id}
+                            onClick={() => onTogglePause(gk, !gk.paused)}
+                          >
+                            {pausingId === gk.id ? (
+                              <IconRefresh style={{ width: 11, height: 11, animation: "spin 1s linear infinite" }} />
+                            ) : gk.paused ? (
+                              <IconPower style={{ width: 11, height: 11, color: "#34d399" }} />
+                            ) : (
+                              <IconPause style={{ width: 11, height: 11 }} />
+                            )}
+                          </button>
+                        )}
+                        {onRemovePlatform && (
+                          <button
+                            type="button"
+                            className="cockpit-icon-btn cockpit-icon-btn--danger"
+                            style={{ width: 20, height: 20 }}
+                            data-tip="移除 Grok 授权"
+                            onClick={() => onRemovePlatform(group, "grok")}
+                          >
+                            <IconTrash style={{ width: 11, height: 11 }} />
+                          </button>
+                        )}
                       </div>
                     </div>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 11.5 }}>

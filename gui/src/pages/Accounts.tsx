@@ -33,7 +33,7 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
   const [planFilter, setPlanFilter] = useState<string>("all");
   const [sortBy, setSortBy] = useState<"quota" | "reset" | "email">("quota");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [viewMode, setViewMode] = useState<"grid" | "list">("list");
   const [showSensitive, setShowSensitive] = useState(false);
   const [sensitiveBusy, setSensitiveBusy] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -337,6 +337,48 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
       }));
     }
     await Promise.all(tasks);
+    await loadAccounts(true);
+  };
+
+  const handleRemovePlatform = async (
+    group: EmailAccountGroup,
+    platform: "antigravity" | "aiStudio" | "chatgpt" | "grok",
+  ) => {
+    const labels: Record<string, string> = {
+      antigravity: "Antigravity",
+      aiStudio: "AI Studio Key",
+      chatgpt: "ChatGPT",
+      grok: "Grok",
+    };
+    const ok = await confirmAction({
+      message: `确定要移除 ${group.email} 的 ${labels[platform]} 授权吗？移除后需重新登录或关联。`,
+      confirmLabel: "确认移除",
+      tone: "danger",
+    });
+    if (!ok) return;
+
+    if (platform === "antigravity" && group.antigravity) {
+      await fetch(
+        `${apiBase}/api/oauth/accounts?provider=google-antigravity&id=${encodeURIComponent(group.antigravity.id)}`,
+        { method: "DELETE" },
+      );
+    } else if (platform === "chatgpt" && group.chatgpt) {
+      await fetch(
+        `${apiBase}/api/codex-auth/accounts?id=${encodeURIComponent(group.chatgpt.id)}`,
+        { method: "DELETE" },
+      );
+    } else if (platform === "grok" && group.grok) {
+      await fetch(
+        `${apiBase}/api/oauth/accounts?provider=xai&id=${encodeURIComponent(group.grok.id)}`,
+        { method: "DELETE" },
+      );
+    } else if (platform === "aiStudio") {
+      await fetch(`${apiBase}/api/oauth/accounts/ai-studio-key`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "google-antigravity", email: group.email, apiKey: "" }),
+      });
+    }
     await loadAccounts(true);
   };
 
@@ -701,6 +743,7 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
           onAddPlatform={(email, p) => void handleAddOAuthAccount(p, email)}
           onCopy={copy}
           onRemoveGroup={handleRemoveGroup}
+          onRemovePlatform={handleRemovePlatform}
         />
       ) : (
         <div className="cockpit-grid cockpit-grid--merged">
@@ -726,6 +769,7 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
               onAddPlatform={(email, p) => void handleAddOAuthAccount(p, email)}
               onCopy={copy}
               onRemoveGroup={handleRemoveGroup}
+              onRemovePlatform={handleRemovePlatform}
               onShowInfo={setInfoModalGroup}
               onExport={handleExportGroup}
             />
