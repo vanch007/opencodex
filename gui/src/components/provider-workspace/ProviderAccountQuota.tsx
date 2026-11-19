@@ -38,25 +38,29 @@ export default function ProviderAccountQuota({
 
   return <div data-quota-state={state}>
     {quotaUnavailable && <p className="muted pwi-auth-acct-quota-stale">{t(failure ? `pws.quotaFailure.${failure}` : "pws.accountQuotaUnavailable")}</p>}
-    {displayedQuota || pending ? (
-      isAntigravity ? (
-        <AntigravityQuotaCard quota={quota} pending={pending && !quota} hideArgon={shouldHideArgon} plan={plan} />
-      ) : (
-        <ProviderCapacityQuota
-          report={{ quota: displayedQuota, updatedAt: displayedQuota?.updatedAt, ...(quotaMode === "passive" ? { observed: true } : {}) }}
-          pending={pending && !quota}
-          hideArgon={shouldHideArgon}
-        />
-      )
+      { displayedQuota || pending ? (
+        isAntigravity ? (
+          <AntigravityQuotaCard quota={quota} pending={pending && !quota} hideArgon={shouldHideArgon} plan={plan} />
+        ) : (
+          <ProviderCapacityQuota
+            report={{ quota: displayedQuota, updatedAt: displayedQuota?.updatedAt, ...(quotaMode === "passive" ? { observed: true } : {}) }}
+            pending={pending && !quota}
+            hideArgon={shouldHideArgon}
+          />
+        )
     ) : !quota && !quotaUnavailable && (
-      <p className="muted">{t(quotaMode === "passive" ? "pws.quotaUnobserved" : "pws.quotaUnavailable")}</p>
-    )}
-    {quotaUnavailable && quota && !isAntigravity && <p className="muted">
+        <p className="muted">{t(quotaMode === "passive" ? "pws.quotaUnobserved" : "pws.quotaUnavailable")}</p>
+      )}
+  {
+    quotaUnavailable && quota && !isAntigravity && <p className="muted">
       {t("pws.stats.quotaUpdated")}: {formatRelativeTime(quota.updatedAt, relativeTimeLabelsFromT(t))}
-    </p>}
-    {/* #8397: an unknown balance says when it was last read. */}
-    {(quotaUnavailable || !quota) && !pending && typeof quotaReadAt === "number" && <p className="muted">
+    </p>
+  }
+  {/* #8397: an unknown balance says when it was last read. */ }
+  {
+    (quotaUnavailable || !quota) && !pending && typeof quotaReadAt === "number" && <p className="muted">
       {t("pws.quotaLastRead")}: {formatRelativeTime(quotaReadAt, relativeTimeLabelsFromT(t))}
-    </p>}
-  </div>;
+    </p>
+  }
+  </div >;
 }
