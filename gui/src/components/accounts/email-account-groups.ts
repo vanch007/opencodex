@@ -231,7 +231,14 @@ export function filterAndSortEmailGroups(
       if (planFilter !== "all") {
         const plans = [g.antigravity?.plan, g.chatgpt?.plan, g.grok?.plan].filter(Boolean).map(s => String(s).toLowerCase());
         if (planFilter === "pro" && !plans.some(p => p.includes("pro") || p === "g1-pro-tier")) return false;
-        if (planFilter === "free" && !plans.some(p => p.includes("free"))) return false;
+        if (planFilter === "free") {
+          const isPro = plans.some(p => p.includes("pro") || p === "g1-pro-tier");
+          const isUltra = plans.some(p => p.includes("ultra"));
+          const isPlus = plans.some(p => p.includes("plus"));
+          const hasFree = plans.some(p => p.includes("free"));
+          // A group is classified as Free if it has a free tier and does not possess higher paid tiers (Pro/Ultra/Plus)
+          if (isPro || isUltra || isPlus || !hasFree) return false;
+        }
         if (planFilter === "ultra" && !plans.some(p => p.includes("ultra"))) return false;
         if (planFilter === "plus" && !plans.some(p => p.includes("plus"))) return false;
         if (planFilter === "argon" && !g.hasArgon) return false;
