@@ -33,10 +33,17 @@ import {
 import {
   ANTIGRAVITY_MODELS,
   ANTIGRAVITY_MODEL_EFFORTS,
+  isAntigravityExclusiveTierModel,
   parseAntigravityAvailableModels,
   resolveAntigravityEffortWireModel,
 } from "../../../src/providers/antigravity-models";
 import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../../../src/providers/quota";
+import {
+  ANTIGRAVITY_BACKGROUND_QUOTA_REFRESH_MS,
+  ANTIGRAVITY_BACKGROUND_ROSTER_REFRESH_MS,
+  clearAntigravityBackgroundRefreshStateForTests,
+  runAntigravityBackgroundRefresh,
+} from "../../../src/providers/quota/antigravity-background-refresh";
 import type { OcxConfig, OcxProviderConfig } from "../../../src/types";
 import { withStubbedProviderFetch } from "../../helpers/catalog-provider-fetch";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
@@ -474,5 +481,107 @@ describe("model routing fails closed on a proven roster omission (#7500)", () =>
     seedGenericPoolSelection(PROVIDER, "acct-55b");
     expect(preferredInitialAccount(rrConfig, PROVIDER, Date.now(), "claude-opus-5-5", "acct-46x")).toBe("acct-55b");
     expect(preferredInitialAccount(rrConfig, PROVIDER, Date.now(), "gemini-3.8-flash-high", "acct-46x")).toBe("acct-55b");
+  });
+});
+
+describe("Gemini 4 exclusive-tier fallback and background refresh", () => {
+  afterEach(() => {
+    clearAntigravityBackgroundRefreshStateForTests();
+  });
+
+  test("isAntigravityExclusiveTierModel includes gemini-4-hydrogen, gemini-4-neon, and tiered variants", () => {
+    for (const id of [
+      "gemini-4-argon",
+      "gemini-4-hydrogen",
+      "gemini-4-hydrogen-high",
+      "gemini-4-hydrogen-xhigh",
+      "gemini-4-hydrogen-tiered-high",
+      "gemini-4-neon",
+      "gemini-4-neon-high",
+      "claude-opus-5-5",
+      "claude-sonnet-5-5",
+    ]) {
+      expect(isAntigravityExclusiveTierModel(id)).toBe(true);
+    }
+    expect(isAntigravityExclusiveTierModel("gemini-3.8-flash")).toBe(false);
+  });
+
+  test("stale roster falls back to cached Argon quota window to exclude Flash accounts for gemini-4-hydrogen", () => {
+    homeWithAccounts(["acct-flash", "acct-pro"], "acct-flash");
+    const staleAt = Date.now() - ANTIGRAVITY_ACCOUNT_ROSTER_TTL_MS - 1;
+    recordAntigravityAccountRoster(PROVIDER, "acct-flash", parseAntigravityAvailableModels(ROSTER_46)!, staleAt);
+    recordAntigravityAccountRoster(PROVIDER, "acct-pro", parseAntigravityAvailableModels(ROSTER_55)!, staleAt);
+    setCachedProviderAccountQuotaForTests(PROVIDER, "acct-flash", {
+      updatedAt: Date.now(),
+      customWindows: [{ label: "Gem", percent: 5 }, { label: "Gem (Weekly)", percent: 18 }],
+    });
+    setCachedProviderAccountQuotaForTests(PROVIDER, "acct-pro", {
+      updatedAt: Date.now(),
+      customWindows: [
+        { label: "Gem", percent: 41 },
+        { label: "Gem (Weekly)", percent: 88 },
+        { label: "Argon (Weekly)", modelId: "gemini-4-argon", percent: 2 },
+      ],
+    });
+
+    expect(antigravityAccountSupportsModel(PROVIDER, "acct-flash", "gemini-4-hydrogen")).toBe(false);
+    expect(antigravityAccountSupportsModel(PROVIDER, "acct-pro", "gemini-4-hydrogen")).toBe(true);
+    const cfg = {
+      providers: { [PROVIDER]: provider({ oauthAccountFailover: { enabled: true } }) },
+    } as unknown as OcxConfig;
+    expect(routeAntigravityModel(cfg, PROVIDER, "acct-flash", "gemini-4-hydrogen"))
+      .toEqual({ kind: "reroute", accountId: "acct-pro" });
+  });
+
+  test("runAntigravityBackgroundRefresh refreshes stale/missing quotas and rosters, then skips when fresh", async () => {
+    homeWithAccounts(["acct-a", "acct-b", "acct-paused"], "acct-a", ["acct-paused"]);
+    let nowMs = 1_800_000_000_000;
+    let quotaCalls = 0;
+    const rosterCalls: string[] = [];
+
+    // Initial state: acct-a has fresh quota and fresh roster; acct-b lacks both.
+    setCachedProviderAccountQuotaForTests(PROVIDER, "acct-a", {
+      updatedAt: nowMs - 60_000,
+      customWindows: [{ label: "Gem", percent: 10 }],
+    });
+    recordAntigravityAccountRoster(PROVIDER, "acct-a", parseAntigravityAvailableModels(ROSTER_46)!, nowMs - 60_000);
+
+    const cfg = {
+      providers: { [PROVIDER]: provider({ oauthAccountFailover: { enabled: true } }) },
+    } as unknown as OcxConfig;
+
+    const deps = {
+      now: () => nowMs,
+      fetchQuotas: async () => {
+        quotaCalls += 1;
+        setCachedProviderAccountQuotaForTests(PROVIDER, "acct-a", { updatedAt: nowMs, customWindows: [] });
+        setCachedProviderAccountQuotaForTests(PROVIDER, "acct-b", { updatedAt: nowMs, customWindows: [] });
+      },
+      refreshAccountRoster: async ({ accountId }: { accountId: string }) => {
+        rosterCalls.push(accountId);
+        recordAntigravityAccountRoster(PROVIDER, accountId, parseAntigravityAvailableModels(ROSTER_55)!, nowMs);
+      },
+    };
+
+    await runAntigravityBackgroundRefresh(cfg, deps);
+    expect(quotaCalls).toBe(1);
+    expect(rosterCalls).toEqual(["acct-b"]);
+
+    // Everything is now fresh: immediate re-run must skip both stages.
+    await runAntigravityBackgroundRefresh(cfg, deps);
+    expect(quotaCalls).toBe(1);
+    expect(rosterCalls).toEqual(["acct-b"]);
+
+    // Advance past quota cadence (10m) but within roster cadence (3h): refreshes quota only.
+    nowMs += ANTIGRAVITY_BACKGROUND_QUOTA_REFRESH_MS + 1;
+    await runAntigravityBackgroundRefresh(cfg, deps);
+    expect(quotaCalls).toBe(2);
+    expect(rosterCalls).toEqual(["acct-b"]);
+
+    // Advance past roster cadence (3h): refreshes both usable accounts' rosters.
+    nowMs += ANTIGRAVITY_BACKGROUND_ROSTER_REFRESH_MS + 1;
+    await runAntigravityBackgroundRefresh(cfg, deps);
+    expect(quotaCalls).toBe(3);
+    expect(rosterCalls).toEqual(["acct-b", "acct-a", "acct-b"]);
   });
 });

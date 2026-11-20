@@ -3,9 +3,9 @@ import { isAntigravityModelNotFoundRefusal } from "../../src/server/responses/an
 import { fetchAntigravityWithRetry } from "../../src/adapters/google-http";
 
 const model = "gemini-3.8-flash";
-async function normalized(body: string | ReadableStream<Uint8Array>, status = 404): Promise<Response> {
+async function normalized(body: string | ReadableStream<Uint8Array>, status = 404, reqModel = model): Promise<Response> {
   return fetchAntigravityWithRetry({ url: "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent",
-    method: "POST", headers: {}, body: JSON.stringify({ model }) }, {
+    method: "POST", headers: {}, body: JSON.stringify({ model: reqModel }) }, {
     executor: (async () => new Response(body, { status })) as typeof fetch,
   });
 }
@@ -99,4 +99,24 @@ test("cancellation while reading an original 404 body propagates by identity", a
   await atRead;
   controller.abort(reason);
   await expect(pending).rejects.toBe(reason);
+});
+
+test("CCA 404 without ResourceInfo details still triggers model denial on exclusive Gemini 4 and Claude 5.5 models", async () => {
+  const noDetailsNotFound = JSON.stringify({
+    error: { code: 404, status: "NOT_FOUND", message: "Requested entity was not found." },
+  });
+  for (const exclusiveModel of ["gemini-4-hydrogen-high", "gemini-4-argon-high", "claude-opus-5-5-high"]) {
+    expect(await isAntigravityModelNotFoundRefusal(await normalized(noDetailsNotFound, 404, exclusiveModel))).toBe(true);
+  }
+  expect(await isAntigravityModelNotFoundRefusal(await normalized(noDetailsNotFound, 404, "gemini-3.8-flash"))).toBe(false);
+
+  const otherResource = JSON.stringify({
+    error: {
+      code: 404,
+      status: "NOT_FOUND",
+      message: "Requested entity was not found.",
+      details: [{ "@type": "type.googleapis.com/google.rpc.ResourceInfo", resourceName: "projects/p" }],
+    },
+  });
+  expect(await isAntigravityModelNotFoundRefusal(await normalized(otherResource, 404, "gemini-4-hydrogen-high"))).toBe(false);
 });

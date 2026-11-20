@@ -3,6 +3,7 @@ import { BOUNDED_BODY_MAX_BYTES } from "../lib/bounded-body";
 import { registerProviderResponseProvenance } from "../providers/request-pacing";
 import { parseUpstreamJsonPayload } from "./upstream-http-error";
 import { ANTIGRAVITY_TOS_VIOLATION_PREFIX } from "./google-errors";
+import { isAntigravityExclusiveTierModel } from "../providers/antigravity-models";
 
 /** Trusted only at the original Google body boundary; never serialized or inferred from display text. */
 const modelNotFoundResponses = new WeakMap<Response, true>();
@@ -21,6 +22,15 @@ export function markAntigravityModelNotFound(response: Response, requestBody: st
   if (typeof model !== "string" || !model || !error || error.status !== "NOT_FOUND"
     || (error.code !== undefined && error.code !== 404)) return;
   const details = Array.isArray(error.details) ? error.details : [];
+  if (
+    details.length === 0
+    && error.code === 404
+    && error.message === "Requested entity was not found."
+    && isAntigravityExclusiveTierModel(model)
+  ) {
+    modelNotFoundResponses.set(response, true);
+    return;
+  }
   const resourceInfo = details.filter((detail): detail is Record<string, unknown> =>
     detail !== null && typeof detail === "object" && !Array.isArray(detail)
     && detail["@type"] === "type.googleapis.com/google.rpc.ResourceInfo");

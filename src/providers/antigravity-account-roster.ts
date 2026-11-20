@@ -170,6 +170,20 @@ function freshRoster(providerName: string, accountId: string, now: number): Acco
   return roster;
 }
 
+/** Last observed timestamp (ms) recorded for this account's roster, regardless of TTL. */
+export function antigravityAccountRosterObservedAt(
+  providerName: string,
+  accountId: string,
+): number | undefined {
+  const key = rosterKey(providerName, accountId);
+  let roster = rosters.get(key);
+  if (!roster) {
+    loadPersistedRosters();
+    roster = rosters.get(key);
+  }
+  return roster?.observedAt;
+}
+
 /** The picker ids one account's last discovery returned, or `undefined` when unknown. */
 export function antigravityAccountRosterModelIds(
   providerName: string,

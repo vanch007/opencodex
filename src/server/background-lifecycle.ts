@@ -34,6 +34,7 @@ import {
   type MemoryWatchdog,
 } from "./memory-watchdog";
 import { ensureQuotaPoolIdentity } from "../quota-pool/identity";
+import { registerAntigravityBackgroundRefreshWorker } from "../providers/quota/antigravity-background-refresh";
 import { isTelemetryEnvOptOut } from "../telemetry/consent";
 // The state module alone: the scheduler and its aggregation stay behind the dynamic import below.
 import { TELEMETRY_ENV_OPT_OUT_REFRESH_MS, endTelemetryEnvOptOut, recordTelemetryEnvOptOut } from "../telemetry/state";
@@ -52,6 +53,7 @@ type LeaseOwner = {
   applyPolicy: PolicyApply;
   resources: ServerResourceOwnerLease;
   lowQuota: LowQuotaRegistration;
+  antigravityRefresh: () => void;
 };
 
 export type ServerBackgroundLifecycleLease = {
@@ -251,6 +253,7 @@ function removeOwner(owner: LeaseOwner): boolean {
 function releaseOwnerSynchronously(owner: LeaseOwner): "inactive" | "shared" | "last" {
   if (!removeOwner(owner)) return "inactive";
   owner.lowQuota();
+  owner.antigravityRefresh();
   owner.resources.release();
   const nextOwner = owners.at(-1);
   if (nextOwner) {
@@ -286,6 +289,7 @@ export function acquireServerBackgroundLifecycle(
     applyPolicy,
     resources: acquireServerResourceOwner(),
     lowQuota: registerCodexLowQuotaProtection(config, { desktopSink: () => resolveLowQuotaDesktopSink() }),
+    antigravityRefresh: registerAntigravityBackgroundRefreshWorker(config),
   };
   try {
     if (!processLoops) {
@@ -296,6 +300,7 @@ export function acquireServerBackgroundLifecycle(
     owners.push(owner);
   } catch (error) {
     owner.lowQuota();
+    owner.antigravityRefresh();
     owner.resources.release();
     throw error;
   }
@@ -326,6 +331,7 @@ export function acquireServerBackgroundLifecycle(
     releaseAfterFailedStart() {
       if (releaseFlight) return;
       owner.lowQuota();
+      owner.antigravityRefresh();
       // Startup evaluation is scheduled only after both listeners bind, so a
       // failed start cannot have spawned a Worker for this lease. Keep rollback
       // synchronous so a caller may immediately retry a different port.

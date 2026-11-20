@@ -948,12 +948,20 @@ export function canonicalAntigravityUsageModel(modelId: string): string {
 }
 
 /**
- * Whether this model belongs to an Antigravity Ultra/Enterprise exclusive tier family
- * (Gemini 4 Argon, Claude Opus 5.5, Claude Sonnet 5.5).
+ * Whether this model belongs to an Antigravity high-tier / exclusive tier family
+ * (Gemini 4 Argon / Hydrogen / Carbon / Neon, Claude Opus 5.5, Claude Sonnet 5.5).
  */
 export function isAntigravityExclusiveTierModel(modelId: string | null | undefined): boolean {
   if (!modelId) return false;
   const id = modelId.trim();
-  const canonical = canonicalAntigravityUsageModel(Object.hasOwn(ANTIGRAVITY_MODEL_ALIASES, id) ? ANTIGRAVITY_MODEL_ALIASES[id]! : id);
-  return canonical === "gemini-4-argon" || canonical === "gemini-4-carbon" || canonical === "claude-opus-5-5" || canonical === "claude-sonnet-5-5";
+  const canonical = canonicalAntigravityUsageModel(
+    Object.hasOwn(ANTIGRAVITY_MODEL_ALIASES, id) ? ANTIGRAVITY_MODEL_ALIASES[id]! : id,
+  );
+  return canonical === "gemini-4-argon"
+    || canonical === "gemini-4-hydrogen"
+    || canonical === "gemini-4-carbon"
+    || canonical === "gemini-4-neon"
+    || /^gemini-4-(?:argon|hydrogen|carbon|neon)(?:-(?:low|medium|high|xhigh|tiered(?:-(?:low|medium|high|xhigh))?))?$/i.test(canonical)
+    || canonical === "claude-opus-5-5"
+    || canonical === "claude-sonnet-5-5";
 }
