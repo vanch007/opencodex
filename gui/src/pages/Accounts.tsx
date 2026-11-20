@@ -18,10 +18,10 @@ import {
   sanitizeAiStudioKeyInput,
 } from "../components/accounts/email-account-groups";
 import { IconPlus, IconRefresh, IconUser } from "../icons";
-import { openBrowserRequestField } from "../oauth-open-browser-pref";
-import { parseBrowserLaunch } from "../oauth-browser-launch";
+import { useAccountsOAuth } from "../components/accounts/use-accounts-oauth";
+import { AccountsOAuthStatus } from "../components/accounts/AccountsOAuthStatus";
 
-export default function Accounts({ apiBase }: { apiBase: string }) {
+export default function Accounts({ apiBase, pollIntervalMs }: { apiBase: string; pollIntervalMs?: number }) {
   const [loading, setLoading] = useState(true);
   const [refreshingAll, setRefreshingAll] = useState(false);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
@@ -44,8 +44,6 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
   const [isBatchPausing, setIsBatchPausing] = useState(false);
   const [showAddCodexModal, setShowAddCodexModal] = useState(false);
   const [showAddMenu, setShowAddMenu] = useState(false);
-  const [oauthBusyProvider, setOauthBusyProvider] = useState<string | null>(null);
-  const [targetEmailForOAuth, setTargetEmailForOAuth] = useState<string | null>(null);
   const [infoModalGroup, setInfoModalGroup] = useState<EmailAccountGroup | null>(null);
   const addMenuRef = useRef<HTMLDivElement>(null);
   const { outcomeFor, copy } = useCopyFeedback<string>();
@@ -144,6 +142,15 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
   useEffect(() => {
     void loadAccounts();
   }, [loadAccounts]);
+
+  const oauth = useAccountsOAuth({
+    apiBase,
+    accounts,
+    pollIntervalMs,
+    onOpenCodexModal: () => setShowAddCodexModal(true),
+    onCopyEmail: email => copy(email, `oauth-email-${email}`),
+    onAccountsChanged: () => loadAccounts(true),
+  });
 
   useEffect(() => {
     const controller = new AbortController();
@@ -501,58 +508,9 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
     }
   };
 
-  const handleAddOAuthAccount = async (provider: string, forEmail?: string) => {
+  const handleAddOAuthAccount = (provider: string, forEmail?: string) => {
     setShowAddMenu(false);
-    setTargetEmailForOAuth(forEmail ?? null);
-    if (forEmail) {
-      copy(forEmail, `oauth-email-${forEmail}`);
-    }
-    if (provider === "openai") {
-      setShowAddCodexModal(true);
-      return;
-    }
-    setOauthBusyProvider(provider);
-    try {
-      const res = await fetch(`${apiBase}/api/oauth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          provider,
-          addAccount: true,
-          ...openBrowserRequestField(),
-        }),
-      });
-      const data = await res.json().catch(() => ({})) as { url?: string; browserLaunch?: unknown; error?: string };
-      if (!res.ok || data.error) {
-        setOauthBusyProvider(null);
-        return;
-      }
-      const browserLaunch = parseBrowserLaunch(data.browserLaunch);
-      if (data.url && browserLaunch !== "started") {
-        window.open(data.url, "_blank", "noopener,noreferrer");
-      }
-      void (async () => {
-        try {
-          for (let i = 0; i < 80; i++) {
-            await new Promise(r => setTimeout(r, 1500));
-            const sRes = await fetch(`${apiBase}/api/oauth/status?provider=${encodeURIComponent(provider)}`).catch(() => null);
-            if (!sRes || !sRes.ok) continue;
-            const s = await sRes.json().catch(() => null) as { loggedIn?: boolean; status?: string; error?: string } | null;
-            if (s?.error) break;
-            if (s?.loggedIn || s?.status === "complete") {
-              await loadAccounts(true);
-              break;
-            }
-          }
-        } finally {
-          setOauthBusyProvider(null);
-          setTargetEmailForOAuth(null);
-        }
-      })();
-    } catch {
-      setOauthBusyProvider(null);
-      setTargetEmailForOAuth(null);
-    }
+    void oauth.requestAddOAuthAccount(provider, forEmail);
   };
 
   const handleExportGroup = (group: EmailAccountGroup) => {
@@ -636,7 +594,7 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
               type="button"
               className="cockpit-dropdown-item"
               onClick={() => void handleAddOAuthAccount("google-antigravity")}
-              disabled={oauthBusyProvider !== null}
+              disabled={oauth.oauthBusyProvider !== null}
             >
               <span>添加 Google Antigravity</span>
             </button>
@@ -651,7 +609,7 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
               type="button"
               className="cockpit-dropdown-item"
               onClick={() => void handleAddOAuthAccount("xai")}
-              disabled={oauthBusyProvider !== null}
+              disabled={oauth.oauthBusyProvider !== null}
             >
               <span>添加 xAI Grok</span>
             </button>
@@ -659,28 +617,7 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
         )}
       </div>
 
-      {oauthBusyProvider && (
-        <div
-          style={{
-            margin: "0 0 12px 0",
-            padding: "8px 14px",
-            background: "rgba(59, 130, 246, 0.1)",
-            border: "1px solid rgba(59, 130, 246, 0.3)",
-            borderRadius: "var(--radius-sm, 8px)",
-            fontSize: "13px",
-            color: "#3b82f6",
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-          }}
-        >
-          <IconRefresh className="spin" style={{ width: 14, height: 14 }} />
-          <span>
-            正在等待 {oauthBusyProvider === "xai" ? "xAI Grok" : oauthBusyProvider === "google-antigravity" ? "Google Antigravity" : oauthBusyProvider} 浏览器授权完成
-            {targetEmailForOAuth ? `（已自动复制目标邮箱 ${targetEmailForOAuth} 到剪贴板）` : "..."}
-          </span>
-        </div>
-      )}
+      <AccountsOAuthStatus oauth={oauth} />
 
       {loading ? (
         <div className="cockpit-empty">
@@ -782,11 +719,11 @@ export default function Accounts({ apiBase }: { apiBase: string }) {
           apiBase={apiBase}
           onClose={() => {
             setShowAddCodexModal(false);
-            setTargetEmailForOAuth(null);
+            oauth.clearTargetEmail();
           }}
           onAdded={() => {
             setShowAddCodexModal(false);
-            setTargetEmailForOAuth(null);
+            oauth.clearTargetEmail();
             void loadAccounts();
           }}
         />
