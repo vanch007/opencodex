@@ -12,6 +12,7 @@ import {
   isGenericFailoverProvider,
   isGenericOAuthFailoverEnabled,
   noteGenericPoolSelection,
+  preferKiroModelSupport,
   preferredInitialAccount,
   rotateGenericOAuthAccountOn429,
   rotateAntigravityAccountOnAuthRefusal,
@@ -971,6 +972,24 @@ describe("#695 the generic pool consumes its persisted strategy behind pool.kern
 
     const next = rotateGenericOAuthAccountOn429(cfg, "xai", sorted[0]!, null);
     expect(next).toBe(sorted[1]!);
+  });
+
+  test("preferKiroModelSupport routes models according to modelAccountRoutes for generic providers", async () => {
+    const ids = await seed(3);
+    const cfg = {
+      providers: {
+        xai: {
+          oauthAccountFailover: {
+            enabled: true,
+            modelAccountRoutes: {
+              "grok-4.7": ids[2]!,
+            },
+          },
+        },
+      },
+    } as unknown as Parameters<typeof preferKiroModelSupport>[3];
+    const candidates = preferKiroModelSupport("xai", ids, "grok-4.7", cfg);
+    expect(candidates).toEqual([ids[2]!]);
   });
 });
 

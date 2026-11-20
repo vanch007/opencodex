@@ -331,11 +331,11 @@ export function preferKiroModelSupport(
   providerName: string, ids: string[], model?: string | null, config?: OcxConfig,
 ): string[] {
   if (!model) return ids;
+  if (config) {
+    const explicit = resolveExplicitModelAccountRoute(config, providerName, model);
+    if (explicit && ids.includes(explicit)) return [explicit];
+  }
   if (providerName === "google-antigravity") {
-    if (config) {
-      const explicit = resolveExplicitModelAccountRoute(config, providerName, model);
-      if (explicit && ids.includes(explicit)) return [explicit];
-    }
     const positive = ids.filter(id => accountListsModel(providerName, id, model) === true);
     const modelMatched = positive.length ? positive : ids.filter(id => accountListsModel(providerName, id, model) !== false);
     const nonExhausted = modelMatched.filter(id => !isAccountQuotaExhausted(providerName, id, model));
