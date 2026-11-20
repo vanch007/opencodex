@@ -50,7 +50,7 @@ describe("Antigravity IDE protobuf serialization & sync", () => {
       access: "ya29.test_access",
       refresh: "1//06_test_refresh",
       expires: 1800000000000,
-      email: "User.Name@Gmail.com",
+      email: "User.Name@example.com",
     });
     expect(keyringStr.startsWith("go-keyring-base64:")).toBe(true);
     const jsonPart = Buffer.from(keyringStr.slice("go-keyring-base64:".length), "base64").toString("utf-8");
@@ -59,7 +59,7 @@ describe("Antigravity IDE protobuf serialization & sync", () => {
     expect(parsed.token.refresh_token).toBe("1//06_test_refresh");
     expect(parsed.token.token_type).toBe("Bearer");
     expect(parsed.auth_method).toBe("consumer");
-    expect(parsed.id_token_email).toBe("User.Name@Gmail.com");
+    expect(parsed.id_token_email).toBe("User.Name@example.com");
   });
 
   test("creates valid oauth info protobuf message", () => {
@@ -125,7 +125,7 @@ describe("Antigravity IDE protobuf serialization & sync", () => {
         .query("INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)")
         .run("antigravityUnifiedStateSync.oauthToken", Buffer.from(fullTopic).toString("base64"));
 
-      const statusPayload = createMinimalUserStatusPayload("user@gmail.com");
+      const statusPayload = createMinimalUserStatusPayload("user@example.com");
       const statusEntry = createUnifiedTopicEntry("userStatusSentinelKey", statusPayload);
       targetDb
         .query("INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)")
@@ -168,10 +168,10 @@ describe("Antigravity IDE protobuf serialization & sync", () => {
 
       const decodedStatus = Buffer.from(statusRow.value, "base64").toString("utf-8");
       expect(decodedStatus).toContain("userStatusSentinelKey");
-      const statusInnerMatch = decodedStatus.match(/(Gg[A-Za-z0-9+/=]+)/);
+      const statusInnerMatch = decodedStatus.match(/(G[A-Za-z0-9+/=]{10,})/);
       expect(statusInnerMatch).toBeDefined();
       const statusInnerDecoded = Buffer.from(statusInnerMatch![1], "base64").toString("utf-8");
-      expect(statusInnerDecoded).toContain("user@gmail.com");
+      expect(statusInnerDecoded).toContain("user@example.com");
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

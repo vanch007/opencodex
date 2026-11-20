@@ -293,12 +293,12 @@ describe("AI Studio local quota & email-merged account grouping", () => {
 
     syncGoogleApiKeyPool({
       config: cfg,
-      antigravityAccounts: [{ id: "ag1", email: "user@gmail.com", aiStudioApiKey: "AIzaSyAntigravityKey111111" }],
-      standaloneUpdate: { email: "icloud@icloud.com", apiKey: "AIzaSyStandaloneKey222222" },
+      antigravityAccounts: [{ id: "ag1", email: "user@example.com", aiStudioApiKey: "AIzaSyAntigravityKey111111" }],
+      standaloneUpdate: { email: "sync@example.com", apiKey: "AIzaSyStandaloneKey222222" },
     });
     expect(cfg.providers.google?.apiKeyPool?.map(e => e.label)).toEqual([
-      "user@gmail.com",
-      "icloud@icloud.com",
+      "user@example.com",
+      "sync@example.com",
     ]);
     expect(cfg.providers.google?.cacheAffinity).toBe("off");
     expect(cfg.providers.google?.showThinkingSummary).toBe(true);
@@ -307,11 +307,11 @@ describe("AI Studio local quota & email-merged account grouping", () => {
     // Subsequent Antigravity update must not wipe standalone email key
     syncGoogleApiKeyPool({
       config: cfg,
-      antigravityAccounts: [{ id: "ag1", email: "user@gmail.com", aiStudioApiKey: "AIzaSyAntigravityKey111111" }],
+      antigravityAccounts: [{ id: "ag1", email: "user@example.com", aiStudioApiKey: "AIzaSyAntigravityKey111111" }],
     });
     expect(cfg.providers.google?.apiKeyPool?.map(e => e.label)).toEqual([
-      "user@gmail.com",
-      "icloud@icloud.com",
+      "user@example.com",
+      "sync@example.com",
     ]);
   });
 
@@ -323,7 +323,7 @@ describe("AI Studio local quota & email-merged account grouping", () => {
           id: "ag-1",
           provider: "google-antigravity",
           providerLabel: "Google Antigravity",
-          email: "Alpha@gmail.com",
+          email: "Alpha@example.com",
           aiStudioApiKey: "AIzaSyAlpha1234567890123456",
           active: true,
           plan: "g1-pro-tier",
@@ -332,7 +332,7 @@ describe("AI Studio local quota & email-merged account grouping", () => {
           id: "__main__",
           provider: "openai",
           providerLabel: "OpenAI / Codex",
-          email: "alpha@gmail.com",
+          email: "alpha@example.com",
           active: false,
           plan: "plus",
         },
@@ -340,7 +340,7 @@ describe("AI Studio local quota & email-merged account grouping", () => {
           id: "xai-1",
           provider: "xai",
           providerLabel: "xAI Grok",
-          email: "alpha@gmail.com",
+          email: "alpha@example.com",
           active: false,
           plan: "GROK",
         },
@@ -348,7 +348,7 @@ describe("AI Studio local quota & email-merged account grouping", () => {
           id: "cg-2",
           provider: "openai",
           providerLabel: "OpenAI / Codex",
-          email: "only-cg@icloud.com",
+          email: "only-cg@example.com",
           active: false,
           plan: "plus",
         },
@@ -356,7 +356,7 @@ describe("AI Studio local quota & email-merged account grouping", () => {
       [
         {
           entryId: "e2",
-          email: "only-cg@icloud.com",
+          email: "only-cg@example.com",
           aiStudioApiKey: "AIzaSyIcloud123456789012345",
           aiStudioQuota: {
             entryId: "e2",
@@ -382,13 +382,13 @@ describe("AI Studio local quota & email-merged account grouping", () => {
     );
 
     expect(groups).toHaveLength(2);
-    const alpha = groups.find(g => g.emailKey === "alpha@gmail.com")!;
+    const alpha = groups.find(g => g.emailKey === "alpha@example.com")!;
     expect(alpha.antigravity?.id).toBe("ag-1");
     expect(alpha.aiStudio?.apiKey).toBe("AIzaSyAlpha1234567890123456");
     expect(alpha.chatgpt?.id).toBe("__main__");
     expect(alpha.grok?.id).toBe("xai-1");
 
-    const icloud = groups.find(g => g.emailKey === "only-cg@icloud.com")!;
+    const icloud = groups.find(g => g.emailKey === "only-cg@example.com")!;
     expect(icloud.antigravity).toBeUndefined();
     expect(icloud.grok).toBeUndefined();
     expect(icloud.chatgpt?.id).toBe("cg-2");
